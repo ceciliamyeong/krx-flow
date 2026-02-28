@@ -1,5 +1,6 @@
 import requests
 import datetime as dt
+import random
 import pandas as pd
 
 BASE = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
@@ -10,6 +11,20 @@ HEADERS = {
     "Origin": "https://data.krx.co.kr",
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
 }
+
+def _post(payload: dict, session: requests.Session):
+    # ✅ 세션으로 먼저 메인 페이지 한번 찍어서 쿠키 확보
+    session.get("https://data.krx.co.kr", headers=HEADERS, timeout=30)
+
+    # ✅ 약간의 랜덤 딜레이(봇 패턴 완화)
+    time.sleep(0.6 + random.random() * 0.8)
+
+    r = session.post(BASE, headers=HEADERS, data=payload, timeout=30)
+
+    # ✅ 에러면 상태코드 + 본문 일부 노출 (Actions 로그용)
+    if r.status_code != 200:
+        raise RuntimeError(f"KRX HTTP {r.status_code} body[:200]={r.text[:200]}")
+    return r
 
 def fetch_investor_flow(date: dt.date, market: str):
     mkt_map = {
@@ -31,8 +46,8 @@ def fetch_investor_flow(date: dt.date, market: str):
         "csvxls_isNo": "false"
     }
 
-    r = requests.post(BASE, headers=HEADERS, data=payload)
-    r.raise_for_status()
+    session = requests.Session()
+    r = _post(payload, session)
     js = r.json()
 
     df = pd.DataFrame(js["OutBlock_1"])
