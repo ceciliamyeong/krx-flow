@@ -1,7 +1,13 @@
+# scripts/liquidity_fetch.py
 import datetime as dt
-
 import pandas as pd
 from pykrx import stock
+
+
+INDEX_TICKER = {
+    "KOSPI": "1001",
+    "KOSDAQ": "2001",
+}
 
 
 def _to_ymd(d: dt.date) -> str:
@@ -23,8 +29,9 @@ def fetch_liquidity_range(start: dt.date, end: dt.date, market: str) -> pd.DataF
     s = _to_ymd(start)
     e = _to_ymd(end)
 
-    # 1) Index OHLCV (close)
-    idx = stock.get_index_ohlcv_by_date(s, e, market)
+    # 1) Index OHLCV by *ticker* (avoid pykrx '지수명' path)
+    ticker = INDEX_TICKER[market]
+    idx = stock.get_index_ohlcv_by_date(s, e, ticker)
     idx = idx.reset_index()
 
     date_col = _pick_any_col(idx, ["날짜", "Date", "date"])
