@@ -1,45 +1,18 @@
 # scripts/liquidity_fetch.py
+import ast
 import datetime as dt
+import time
+import random
 
 import pandas as pd
+import requests
 from pykrx import stock
 
-# --- pykrx hotfix: '지수명' 컬럼명이 바뀌거나 누락된 경우를 대비 ---
-def _patch_pykrx_index_ticker():
-    try:
-        from pykrx.website.krx.market.ticker import IndexTicker
 
-        def _safe_get_name(self, ticker):
-            # 원래 기대: self.df.loc[ticker, "지수명"]
-            if "지수명" in self.df.columns:
-                return self.df.loc[ticker, "지수명"]
-
-            # 1) '지수명'을 포함한 컬럼 찾기 (공백/변형 대응)
-            for c in self.df.columns:
-                if "지수명" in str(c):
-                    return self.df.loc[ticker, c]
-
-            # 2) '지수' 포함 컬럼 찾기
-            for c in self.df.columns:
-                if "지수" in str(c):
-                    return self.df.loc[ticker, c]
-
-            # 3) 최후: 첫 번째 컬럼
-            return self.df.loc[ticker, self.df.columns[0]]
-
-        IndexTicker.get_name = _safe_get_name
-
-    except Exception:
-        # 패치 실패해도 나머지 로직(거래대금 등)은 계속 돌 수 있게
-        pass
-
-
-_patch_pykrx_index_ticker()
-
-
-INDEX_TICKER = {
-    "KOSPI": "1001",
-    "KOSDAQ": "2001",
+NAVER_API = "https://api.finance.naver.com/siseJson.naver"
+NAVER_SYMBOL = {
+    "KOSPI": "KOSPI",
+    "KOSDAQ": "KOSDAQ",
 }
 
 
@@ -47,11 +20,88 @@ def _to_ymd(d: dt.date) -> str:
     return d.strftime("%Y%m%d")
 
 
-def _pick_any_col(df: pd.DataFrame, candidates: list[str]) -> str:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    raise KeyError(f"missing columns: {candidates} / got: {list(df.columns)}")
+def _naver_fetch_index_close(start: dt.date, end: dt.date, market: str) -> pd.DataFrame:
+    """
+    Naver: returns OHLCV for index symbol (KOSPI/KOSDAQ)
+    We use only date, close
+    """
+    params = {
+        "symbol": NAVER_SYMBOL[market],
+        "requestType": "1",
+        "startTime": _to_ymd(start),
+        "endTime": _to_ymd(end),
+        "timeframe": "day",
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://finance.naver.com/",
+    }
+
+    r = requests.get(NAVER_API, params=params, headers=headers, timeout=30)
+    r.raise_for_status()
+
+    # Response looks like: [['날짜','시가','고가','저가','종가','거래량'], ['20220103',...], ...]
+    text = r.text.strip()
+
+    # 안전 파싱: js array → python literal 형태로 변환
+    # (따옴표/공백 변형을 최대한 흡수)
+    text = text.replace("\n", "").replace("\t", "").replace(" ", "")
+    data = ast.literal_eval(text)
+
+    if not data or len(data) < 2:
+        return pd.DataFrame(columns=["date", "market", "close"])
+
+    header = data[0]
+    rows = data[1:]
+
+    df = pd.DataFrame(rows, columns=header)
+
+    # 컬럼명은 보통 '날짜','종가'
+    date_col = "날짜" if "날짜" in df.columns else df.columns[0]
+    close_col = "종가" if "종가" in df.columns else df.columns[4]
+
+    out = pd.DataFrame(
+        {
+            "date": pd.to_datetime(df[date_col], format="%Y%m%d").dt.date.astype(str),
+            "market": market,
+            "close": pd.to_numeric(df[close_col], errors="coerce"),
+        }
+    )
+    return out
+
+
+def _pykrx_fetch_market_turnover(start: dt.date, end: dt.date, market: str) -> pd.DataFrame:
+    """
+    pykrx: market total trading value by date
+    """
+    s = _to_ymd(start)
+    e = _to_ymd(end)
+
+    # 호출 간격(가끔 rate-limit 흉내)
+    time.sleep(0.3 + random.random() * 0.4)
+
+    tv = stock.get_market_trading_value_by_date(s, e, market=market).reset_index()
+
+    # 보통: '날짜', '거래대금' 포함
+    date_col = "날짜" if "날짜" in tv.columns else tv.columns[0]
+
+    # 거래대금 컬럼 후보군
+    for c in ["거래대금", "거래대금(원)", "거래대금합계", "TRADING_VALUE", "trading_value", "turnover"]:
+        if c in tv.columns:
+            turnover_col = c
+            break
+    else:
+        raise KeyError(f"turnover column not found. cols={list(tv.columns)}")
+
+    out = pd.DataFrame(
+        {
+            "date": pd.to_datetime(tv[date_col]).dt.date.astype(str),
+            "market": market,
+            "turnover": pd.to_numeric(tv[turnover_col], errors="coerce"),
+        }
+    )
+    return out
 
 
 def fetch_liquidity_range(start: dt.date, end: dt.date, market: str) -> pd.DataFrame:
@@ -59,50 +109,11 @@ def fetch_liquidity_range(start: dt.date, end: dt.date, market: str) -> pd.DataF
     market: 'KOSPI' or 'KOSDAQ'
     output: date, market, close, turnover
     """
-    s = _to_ymd(start)
-    e = _to_ymd(end)
-
-    # 1) Index close (ticker 기반)
-    ticker = INDEX_TICKER[market]
-    idx = stock.get_index_ohlcv_by_date(s, e, ticker).reset_index()
-
-    date_col = _pick_any_col(idx, ["날짜", "Date", "date"])
-    close_col = _pick_any_col(idx, ["종가", "Close", "close"])
-
-    idx_out = pd.DataFrame(
-        {
-            "date": pd.to_datetime(idx[date_col]).dt.date.astype(str),
-            "market": market,
-            "close": pd.to_numeric(idx[close_col], errors="coerce"),
-        }
-    )
-
-    # 2) Market trading value by date (turnover)
-    tv = stock.get_market_trading_value_by_date(s, e, market=market).reset_index()
-
-    tv_date_col = _pick_any_col(tv, ["날짜", "Date", "date"])
-    turnover_col = _pick_any_col(
-        tv,
-        [
-            "거래대금",
-            "거래대금(원)",
-            "거래대금합계",
-            "TRADING_VALUE",
-            "trading_value",
-            "turnover",
-        ],
-    )
-
-    tv_out = pd.DataFrame(
-        {
-            "date": pd.to_datetime(tv[tv_date_col]).dt.date.astype(str),
-            "market": market,
-            "turnover": pd.to_numeric(tv[turnover_col], errors="coerce"),
-        }
-    )
+    close_df = _naver_fetch_index_close(start, end, market)
+    turn_df = _pykrx_fetch_market_turnover(start, end, market)
 
     out = (
-        idx_out.merge(tv_out, on=["date", "market"], how="outer")
+        close_df.merge(turn_df, on=["date", "market"], how="outer")
         .sort_values(["date", "market"])
         .reset_index(drop=True)
     )
