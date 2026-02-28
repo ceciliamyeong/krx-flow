@@ -1,7 +1,10 @@
 # scripts/backfill_chunk.py
 import argparse
 import datetime as dt
+
+import sys
 from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent))
 
 import pandas as pd
 
