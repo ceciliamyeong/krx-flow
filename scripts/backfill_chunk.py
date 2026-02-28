@@ -1,127 +1,83 @@
-import sys
-from pathlib import Path
-
-# scripts 폴더를 sys.path에 추가
-sys.path.append(str(Path(__file__).resolve().parent))
-
-from krx_fetch_investor import fetch_investor_flow
-
-# scripts/backfill_chunk.py
 import argparse
 import datetime as dt
+from pathlib import Path
 import pandas as pd
+import sys
+
+# scripts 폴더 import 안정화
+sys.path.append(str(Path(__file__).resolve().parent))
+
+from krx_fetch_investor import fetch_investor_flow_range
 
 ROOT = Path(__file__).resolve().parents[1]
 HIST = ROOT / "data" / "history"
 HIST.mkdir(parents=True, exist_ok=True)
 
 SCHEMA_COLS = [
-    "date","market",
+    "date",
+    "market",
     "turnover",
-    "retail_net","foreign_net","institution_net",
-    "advancers","decliners",
-    "top10_turnover_share"
+    "retail_net",
+    "foreign_net",
+    "institution_net",
+    "advancers",
+    "decliners",
+    "top10_turnover_share",
 ]
 
-def daterange(start: dt.date, end: dt.date):
-    cur = start
-    while cur <= end:
-        yield cur
-        cur += dt.timedelta(days=1)
-
-# ⏳ 아직 bld 못 잡은 항목은 일단 None
-def fetch_turnover(date: dt.date, market: str) -> dict | None:
-    return None
-
-def fetch_breadth(date: dt.date, market: str) -> dict | None:
-    return None
-
-def fetch_top10_share(date: dt.date, market: str) -> dict | None:
-    return None
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
-    ap.add_argument("--market", default="BOTH")  # KOSPI/KOSDAQ/BOTH
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", required=True)
+    parser.add_argument("--end", required=True)
+    parser.add_argument("--market", default="BOTH")
+    args = parser.parse_args()
 
     start = dt.date.fromisoformat(args.start)
     end = dt.date.fromisoformat(args.end)
-    markets = ["KOSPI","KOSDAQ"] if args.market == "BOTH" else [args.market]
 
-    rows = []
+    markets = ["KOSPI", "KOSDAQ"] if args.market == "BOTH" else [args.market]
+
+    frames = []
     quality = []
 
-    for d in daterange(start, end):
-        for m in markets:
-            row = {"date": d.isoformat(), "market": m}
-            errors = []
+    for m in markets:
+        try:
+            df_inv = fetch_investor_flow_range(start, end, m)
+            frames.append(df_inv)
 
-            # 1) turnover
-            try:
-                out = fetch_turnover(d, m)
-                if out:
-                    row.update(out)
-                else:
-                    errors.append("turnover:empty")
-            except Exception as e:
-                errors.append(f"turnover:{type(e).__name__}")
-
-            # 2) investor flow ✅
-            try:
-                out = fetch_investor_flow(d, m)
-                if out:
-                    row.update(out)
-                else:
-                    errors.append("investor:empty")
-            except Exception as e:
-                errors.append(f"investor:{type(e).__name__}")
-
-            # 3) breadth
-            try:
-                out = fetch_breadth(d, m)
-                if out:
-                    row.update(out)
-                else:
-                    errors.append("breadth:empty")
-            except Exception as e:
-                errors.append(f"breadth:{type(e).__name__}")
-
-            # 4) top10 share
-            try:
-                out = fetch_top10_share(d, m)
-                if out:
-                    row.update(out)
-                else:
-                    errors.append("top10:empty")
-            except Exception as e:
-                errors.append(f"top10:{type(e).__name__}")
-
-            rows.append(row)
             quality.append({
-                "date": d.isoformat(),
                 "market": m,
-                "errors": "|".join(errors) if errors else "",
-                "missing_fields": sum(1 for c in SCHEMA_COLS if c not in row or pd.isna(row.get(c))),
+                "module": "investor",
+                "status": "ok",
+                "rows": len(df_inv),
             })
 
-    df = pd.DataFrame(rows)
-    for c in SCHEMA_COLS:
-        if c not in df.columns:
-            df[c] = pd.NA
-    df = df[SCHEMA_COLS].sort_values(["date","market"])
+        except Exception as e:
+            quality.append({
+                "market": m,
+                "module": "investor",
+                "status": "error",
+                "error": str(e)[:200],
+            })
 
-    qf = pd.DataFrame(quality).sort_values(["date","market"])
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-    out_csv = HIST / f"flow_{args.start}_{args.end}_{args.market}.csv"
-    out_q = HIST / f"quality_{args.start}_{args.end}_{args.market}.csv"
-    df.to_csv(out_csv, index=False)
-    qf.to_csv(out_q, index=False)
+    for col in SCHEMA_COLS:
+        if col not in df.columns:
+            df[col] = pd.NA
 
-    print("Wrote:", out_csv)
-    print("Quality:", out_q)
-    print("Missing rate:", (qf["missing_fields"] > 0).mean())
+    df = df[SCHEMA_COLS].sort_values(["date", "market"])
+
+    out_flow = HIST / f"flow_{args.start}_{args.end}_{args.market}.csv"
+    out_quality = HIST / f"quality_{args.start}_{args.end}_{args.market}.csv"
+
+    df.to_csv(out_flow, index=False)
+    pd.DataFrame(quality).to_csv(out_quality, index=False)
+
+    print("Flow saved:", out_flow)
+    print("Quality saved:", out_quality)
+
 
 if __name__ == "__main__":
     main()
