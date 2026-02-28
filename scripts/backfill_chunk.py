@@ -1,16 +1,15 @@
+import sys
+from pathlib import Path
+
+# scripts 폴더를 sys.path에 추가
+sys.path.append(str(Path(__file__).resolve().parent))
+
+from krx_fetch_investor import fetch_investor_flow
+
 # scripts/backfill_chunk.py
 import argparse
 import datetime as dt
-
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent))
-
 import pandas as pd
-
-# ✅ 너가 이미 만든 investor fetch 모듈을 import
-# 예: scripts/krx_fetch_investor.py에 fetch_investor_flow가 있다면 이렇게
-from scripts.krx_fetch_investor import fetch_investor_flow
 
 ROOT = Path(__file__).resolve().parents[1]
 HIST = ROOT / "data" / "history"
