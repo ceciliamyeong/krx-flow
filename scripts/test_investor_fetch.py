@@ -11,9 +11,8 @@ for market in ["KOSPI", "KOSDAQ"]:
     df = stock.get_market_trading_value_by_investor(
         start.strftime("%Y%m%d"),
         today.strftime("%Y%m%d"),
-        market=market
+        market   # ← 여기 수정
     )
 
     df = df.reset_index()
-
     print(df.tail())
