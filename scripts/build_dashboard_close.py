@@ -19,6 +19,7 @@ import squarify
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FORCE_CLOSE_DATE = "2026-02-27"  # ✅ run_daily와 동일하게 2월 27일로 설정
 
 HIST_LIQ = ROOT / "data" / "history" / "liquidity_daily.csv"
 
