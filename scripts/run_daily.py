@@ -44,12 +44,10 @@ def _norm_inv(t: str) -> str:
     return s
 
 def _pick_col_safe(df: pd.DataFrame, candidates: List[str]) -> str:
-    """존재하는 컬럼 중 하나를 안전하게 선택"""
+    """존재하는 컬럼 중 하나를 안전하게 선택 (거래대금 대신 순매수 등 대응)"""
     for c in candidates:
         if c in df.columns:
             return c
-    # 후보가 없으면 사용 가능한 모든 컬럼 출력 후 에러 방지를 위해 첫 번째 컬럼 반환
-    print(f"⚠️ Warning: Candidates {candidates} not found in {df.columns.tolist()}")
     return df.columns[0] if not df.empty else ""
 
 def _call_trading_value_by_investor(date_str: str, mk: str) -> pd.DataFrame:
