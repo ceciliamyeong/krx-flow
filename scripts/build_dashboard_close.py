@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional
 
 import pandas as pd
 
@@ -87,6 +87,222 @@ def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0
     return "WEAK"
 
 
+def _to_dash_date(s: str) -> str:
+    """'YYYYMMDD' -> 'YYYY-MM-DD'"""
+    if s and "-" not in s and len(s) == 8:
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+
+def normalize_trade_date(date_str: str) -> str:
+    """
+    date_str가 비영업일일 수도 있으니, pykrx 기준 '가까운 영업일'로 보정.
+    """
+    try:
+        nearest = stock.get_nearest_business_day_in_a_week(date_str)
+        return _to_dash_date(nearest)
+    except Exception:
+        # date_str를 그냥 사용(상위에서 실패 처리)
+        return date_str
+
+
+def prev_business_day(date_str: str) -> str:
+    """
+    date_str: 'YYYY-MM-DD'
+    10일 window로 영업일 리스트를 받아 직전 영업일을 반환.
+    """
+    from datetime import datetime, timedelta
+
+    date_str = normalize_trade_date(date_str)
+
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    start = (d - timedelta(days=10)).strftime("%Y-%m-%d")
+    end = date_str
+
+    days = stock.get_previous_business_days(fromdate=start, todate=end)
+    if not days or len(days) < 2:
+        # fallback: date_str가 비영업일이면 nearest로 다시 시도
+        nearest = normalize_trade_date(date_str)
+        if nearest != date_str:
+            return prev_business_day(nearest)
+        raise RuntimeError(f"Cannot find previous business day for {date_str}")
+
+    prev = days[-2]
+    return _to_dash_date(prev)
+
+
+def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
+    for c in candidates:
+        if c in df.columns:
+            return c
+    raise KeyError(f"None of candidates found in columns: {candidates} / got={df.columns.tolist()}")
+
+
+# ------------------------
+# pykrx extras
+# ------------------------
+
+def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
+    """
+    market: 'KOSPI' or 'KOSDAQ'
+    반환 컬럼:
+      ticker, name, close, mcap, return_1d
+    """
+    date_str = normalize_trade_date(date_str)
+    prev_str = prev_business_day(date_str)
+
+    cap = stock.get_market_cap_by_ticker(date_str, market=market)
+    if cap is None or cap.empty:
+        raise RuntimeError(f"pykrx cap empty: date={date_str}, market={market}")
+
+    prev_ohlcv = stock.get_market_ohlcv_by_ticker(prev_str, market=market)
+    if prev_ohlcv is None or prev_ohlcv.empty:
+        raise RuntimeError(f"pykrx ohlcv empty: date={prev_str}, market={market}")
+
+    close_col = _pick_col(cap, ["종가", "Close"])
+    mcap_col = _pick_col(cap, ["시가총액", "Market Cap"])
+    prev_close_col = _pick_col(prev_ohlcv, ["종가", "Close"])
+
+    df = cap[[close_col, mcap_col]].copy()
+    df = df.rename(columns={close_col: "close", mcap_col: "mcap"})
+    df["ticker"] = df.index.astype(str)
+    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
+
+    prev_close = prev_ohlcv[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
+    prev_close["ticker"] = prev_close.index.astype(str)
+
+    df = df.merge(prev_close.reset_index(drop=True), on="ticker", how="left")
+
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce")
+    df["mcap"] = pd.to_numeric(df["mcap"], errors="coerce")
+
+    df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
+
+    df = df.dropna(subset=["mcap"]).sort_values("mcap", ascending=False).head(10).reset_index(drop=True)
+    return df[["ticker", "name", "close", "mcap", "return_1d"]]
+
+
+def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
+    outpath.parent.mkdir(parents=True, exist_ok=True)
+
+    sizes = df_top10["mcap"].astype(float).tolist()
+    labels = [f"{r['name']}\n{float(r['return_1d']):+.2f}%" for _, r in df_top10.iterrows()]
+
+    plt.figure(figsize=(10, 6))
+    squarify.plot(sizes=sizes, label=labels, alpha=0.9)
+    plt.title(title)
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(outpath, dpi=150)
+    plt.close()
+
+
+def fetch_volatility_top5(date_str: str, market: str) -> list[dict[str, Any]]:
+    """
+    변동성 top5: '당일 등락률(%) 절대값' 상위 5개.
+    반환: [{ticker, name, return_1d, close}, ...]
+    """
+    date_str = normalize_trade_date(date_str)
+    prev_str = prev_business_day(date_str)
+
+    today = stock.get_market_ohlcv_by_ticker(date_str, market=market)
+    prev = stock.get_market_ohlcv_by_ticker(prev_str, market=market)
+    if today is None or today.empty or prev is None or prev.empty:
+        raise RuntimeError(f"pykrx ohlcv empty: date={date_str}/{prev_str}, market={market}")
+
+    close_col = _pick_col(today, ["종가", "Close"])
+    prev_close_col = _pick_col(prev, ["종가", "Close"])
+
+    df = today[[close_col]].copy().rename(columns={close_col: "close"})
+    df["ticker"] = df.index.astype(str)
+
+    prev_df = prev[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
+    prev_df["ticker"] = prev_df.index.astype(str)
+
+    df = df.merge(prev_df.reset_index(drop=True), on="ticker", how="left")
+
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce")
+    df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
+    df["abs_ret"] = df["return_1d"].abs()
+
+    df = df.dropna(subset=["return_1d", "abs_ret"]).sort_values("abs_ret", ascending=False).head(5)
+    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
+
+    out = []
+    for _, r in df.iterrows():
+        out.append(
+            {
+                "ticker": str(r["ticker"]),
+                "name": str(r["name"]),
+                "return_1d": float(r["return_1d"]),
+                "close": float(r["close"]),
+            }
+        )
+    return out
+
+
+def fetch_breadth(date_str: str, market: str) -> dict[str, Any]:
+    """
+    Breadth = 상승/하락 종목 비율(ADV/DEC).
+    - 상승(adv): return_1d > 0
+    - 하락(dec): return_1d < 0
+    - 보합(unch): return_1d == 0
+    반환:
+      {
+        "date": ..., "market": ...,
+        "adv": int, "dec": int, "unch": int, "total": int,
+        "adv_ratio": float, "dec_ratio": float,
+        "adv_dec_ratio": Optional[float]
+      }
+    """
+    date_str = normalize_trade_date(date_str)
+    prev_str = prev_business_day(date_str)
+
+    today = stock.get_market_ohlcv_by_ticker(date_str, market=market)
+    prev = stock.get_market_ohlcv_by_ticker(prev_str, market=market)
+    if today is None or today.empty or prev is None or prev.empty:
+        raise RuntimeError(f"pykrx ohlcv empty: date={date_str}/{prev_str}, market={market}")
+
+    close_col = _pick_col(today, ["종가", "Close"])
+    prev_close_col = _pick_col(prev, ["종가", "Close"])
+
+    df = today[[close_col]].copy().rename(columns={close_col: "close"})
+    df["ticker"] = df.index.astype(str)
+
+    prev_df = prev[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
+    prev_df["ticker"] = prev_df.index.astype(str)
+
+    df = df.merge(prev_df.reset_index(drop=True), on="ticker", how="left")
+
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce")
+    df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
+    df = df.dropna(subset=["return_1d"])
+
+    adv = int((df["return_1d"] > 0).sum())
+    dec = int((df["return_1d"] < 0).sum())
+    unch = int((df["return_1d"] == 0).sum())
+    total = int(len(df))
+
+    adv_ratio = float(adv / total) if total > 0 else 0.0
+    dec_ratio = float(dec / total) if total > 0 else 0.0
+    adv_dec_ratio = float(adv / dec) if dec > 0 else None
+
+    return {
+        "date": date_str,
+        "market": market,
+        "adv": adv,
+        "dec": dec,
+        "unch": unch,
+        "total": total,
+        "adv_ratio": adv_ratio,
+        "dec_ratio": dec_ratio,
+        "adv_dec_ratio": adv_dec_ratio,
+    }
+
+
 # ------------------------
 # Latest date selection
 # ------------------------
@@ -133,10 +349,8 @@ def pick_latest_trade_date(liq: pd.DataFrame, inv: pd.DataFrame) -> str:
     latest_liq = liq_dates[-1]
 
     if inv is None or inv.empty:
-        # investor가 비어있으면 일단 liquidity 최신으로 진행(카드 일부가 빈 채로라도)
         return latest_liq
 
-    # 해당 날짜에 core investor types가 존재하는지 체크
     def has_core(date_str: str) -> bool:
         sub = inv[inv["date"] == date_str]
         if sub.empty:
@@ -147,18 +361,15 @@ def pick_latest_trade_date(liq: pd.DataFrame, inv: pd.DataFrame) -> str:
     if has_core(latest_liq):
         return latest_liq
 
-    # investor가 있는 날짜들 중 liquidity 최신보다 같거나 이전 중 가장 최근
     inv_dates = sorted(inv["date"].unique())
     candidates = [d for d in inv_dates if d <= latest_liq]
     if not candidates:
         return latest_liq
 
-    # 가장 최근 후보부터 core 여부 확인
     for d in reversed(candidates):
         if has_core(d):
             return d
 
-    # core는 없지만 investor가 있는 가장 최근 날짜로라도
     return candidates[-1]
 
 
@@ -170,7 +381,6 @@ def load_index_rows(liq: pd.DataFrame, date_str: str) -> pd.DataFrame:
     day = liq[liq["date"] == date_str].copy()
     if day.empty:
         raise RuntimeError(f"No liquidity rows for date={date_str}")
-    # 기대: KOSPI, KOSDAQ 2행
     return day.sort_values(["market"]).reset_index(drop=True)
 
 
@@ -254,53 +464,6 @@ def build_market_cards(liq_day: pd.DataFrame, inv_pivot: pd.DataFrame) -> Dict[s
     return markets
 
 
-    # Top10 treemap + data
-    top10: Dict[str, Any] = {}
-    treemap_png = {
-        "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
-        "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png",
-    }
-
-    try:
-        for mk in ["KOSPI", "KOSDAQ"]:
-            df_top10 = fetch_top10_mcap_and_return(date_str, mk)
-            top10[mk] = df_top10.to_dict(orient="records")
-
-            make_treemap_png(
-                df_top10,
-                f"{mk} 시총 TOP10 — {date_str}",
-                OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png",
-            )
-
-        dashboard["extras"]["top10_treemap"] = top10
-        dashboard["extras"]["treemap_png"] = treemap_png
-
-    except Exception as e:
-        # pykrx 실패해도 latest.json은 반드시 생성되게
-        dashboard["extras"]["top10_treemap"] = {}
-        dashboard["extras"]["treemap_png"] = treemap_png
-        dashboard["extras"]["top10_error"] = str(e)
-
-    # Volatility top5 + Breadth (여기도 실패해도 진행)
-    try:
-        dashboard["extras"]["volatility_top5"] = {
-            "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
-            "KOSDAQ": fetch_volatility_top5(date_str, "KOSDAQ"),
-        }
-    except Exception as e:
-        dashboard["extras"]["volatility_top5"] = {}
-        dashboard["extras"]["volatility_error"] = str(e)
-
-    try:
-        dashboard["extras"]["breadth"] = {
-            "KOSPI": fetch_breadth(date_str, "KOSPI"),
-            "KOSDAQ": fetch_breadth(date_str, "KOSDAQ"),
-        }
-    except Exception as e:
-        dashboard["extras"]["breadth"] = {}
-        dashboard["extras"]["breadth_error"] = str(e)
-
-
 # ------------------------
 # Main
 # ------------------------
@@ -323,34 +486,50 @@ def main():
         "extras": {},
     }
 
-    # Top10 treemap + data
-    top10: Dict[str, Any] = {}
-    for mk in ["KOSPI", "KOSDAQ"]:
-        df_top10 = fetch_top10_mcap_and_return(date_str, mk)
-        top10[mk] = df_top10.to_dict(orient="records")
-
-        # always overwrite latest images (for web)
-        make_treemap_png(
-            df_top10,
-            f"{mk} 시총 TOP10 — {date_str}",
-            OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png",
-        )
-
-    dashboard["extras"]["top10_treemap"] = top10
-    dashboard["extras"]["treemap_png"] = {
+    # Top10 treemap + data (실패해도 전체 생성은 되도록)
+    treemap_png = {
         "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
         "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png",
     }
 
-    # Volatility top5 + Breadth
-    dashboard["extras"]["volatility_top5"] = {
-        "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
-        "KOSDAQ": fetch_volatility_top5(date_str, "KOSDAQ"),
-    }
-    dashboard["extras"]["breadth"] = {
-        "KOSPI": fetch_breadth(date_str, "KOSPI"),
-        "KOSDAQ": fetch_breadth(date_str, "KOSDAQ"),
-    }
+    try:
+        top10: Dict[str, Any] = {}
+        for mk in ["KOSPI", "KOSDAQ"]:
+            df_top10 = fetch_top10_mcap_and_return(date_str, mk)
+            top10[mk] = df_top10.to_dict(orient="records")
+
+            make_treemap_png(
+                df_top10,
+                f"{mk} 시총 TOP10 — {date_str}",
+                OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png",
+            )
+
+        dashboard["extras"]["top10_treemap"] = top10
+        dashboard["extras"]["treemap_png"] = treemap_png
+
+    except Exception as e:
+        dashboard["extras"]["top10_treemap"] = {}
+        dashboard["extras"]["treemap_png"] = treemap_png
+        dashboard["extras"]["top10_error"] = str(e)
+
+    # Volatility top5 + Breadth (여기도 실패해도 진행)
+    try:
+        dashboard["extras"]["volatility_top5"] = {
+            "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
+            "KOSDAQ": fetch_volatility_top5(date_str, "KOSDAQ"),
+        }
+    except Exception as e:
+        dashboard["extras"]["volatility_top5"] = {}
+        dashboard["extras"]["volatility_error"] = str(e)
+
+    try:
+        dashboard["extras"]["breadth"] = {
+            "KOSPI": fetch_breadth(date_str, "KOSPI"),
+            "KOSDAQ": fetch_breadth(date_str, "KOSDAQ"),
+        }
+    except Exception as e:
+        dashboard["extras"]["breadth"] = {}
+        dashboard["extras"]["breadth_error"] = str(e)
 
     # archive + latest
     archive_path = OUT_ARCHIVE / f"{date_str}.json"
