@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 print("RUNNING FILE:", __file__)
-print("VERSION: build_dashboard_close-final-forceclose-2026-03-01")
+print("VERSION: build_dashboard_close-KRXTOP10-v2-UNITFIX-2026-03-01")
 
 import json
 from pathlib import Path
@@ -49,6 +49,9 @@ def _krx_post_json(payload: Dict[str, str]) -> Dict[str, Any]:
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": "https://data.krx.co.kr/",
+        "Origin": "https://data.krx.co.kr",
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
     r = requests.post(KRX_URL, data=payload, headers=headers, timeout=60)
@@ -68,12 +71,16 @@ def fetch_topN_from_krx_12001(date_str: str, market: str, n: int = 10) -> pd.Dat
         "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
         "locale": "ko_KR",
         "mktId": mktId,
-        "segTpCd": "ALL",
         "trdDd": date_str.replace("-", ""),
         "share": "1",
         "money": "1",
         "csvxls_isNo": "false",
     }
+    # KRX 12001: KOSDAQ(=KSQ)는 segTpCd가 함께 가는 케이스가 많고,
+    # KOSPI(=STK)는 segTpCd 없이도 동작(네트워크 캡처 기준)하는 경우가 있어 조건부로 추가.
+    if mktId == "KSQ":
+        payload["segTpCd"] = "ALL"
+
 
     j = _krx_post_json(payload)
 
@@ -173,7 +180,7 @@ def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0
 def unit_mult(raw_hint: str) -> float:
     s = str(raw_hint)
     if "(십억원)" in s:
-        return 1e10
+        return 1e9
     if "(억원)" in s:
         return 1e8
     if "(백만원)" in s:
