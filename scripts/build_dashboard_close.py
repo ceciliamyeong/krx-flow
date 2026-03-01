@@ -72,11 +72,53 @@ def to_dash_date(s: str) -> str:
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    raise KeyError(f"None of candidates found: {candidates} / got={df.columns.tolist()}")
+    """
+    Robust column picker for pykrx DataFrames.
 
+    - Tries exact match first.
+    - Then tries fuzzy 'contains' match (case/space-insensitive).
+    - Finally, falls back to a numeric-looking column (if available) to avoid hard crash.
+      (We still raise if df is empty.)
+    """
+    if df is None or df.empty:
+        raise KeyError("Empty DataFrame: cannot pick a column")
+
+    cols = list(df.columns)
+
+    # 1) exact match
+    for c in candidates:
+        if c in cols:
+            return c
+
+    # 2) fuzzy contains match (normalize strings)
+    def norm(x: object) -> str:
+        return str(x).strip().replace(" ", "").lower()
+
+    norm_cols = [(c, norm(c)) for c in cols]
+    norm_cands = [norm(c) for c in candidates]
+
+    for cand in norm_cands:
+        for c, nc in norm_cols:
+            if cand and cand in nc:
+                return c
+
+    # 3) heuristic fallback: pick a numeric-looking column (excluding obvious non-metrics)
+    try:
+        bad_tokens = ["종목", "ticker", "name", "isin", "code"]
+        numeric_cols = []
+        for c in cols:
+            if any(t in norm(c) for t in bad_tokens):
+                continue
+            # try converting; if most values are numeric, consider it
+            s = pd.to_numeric(df[c], errors="coerce")
+            if s.notna().mean() > 0.6:
+                numeric_cols.append(c)
+        if numeric_cols:
+            return numeric_cols[0]
+    except Exception:
+        pass
+
+    raise KeyError(f"Column not found. candidates={candidates} / got={cols}")
 
 def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
     if ratio is None:
@@ -144,38 +186,68 @@ def prev_business_day(date_str: str) -> str:
 # ------------------------
 
 def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
+    """
+    Top10 by market cap + 1D return.
+
+    NOTE: pykrx column labels can vary by version/locale.
+    This function uses robust column picking to survive those differences.
+    """
     prev_str = prev_business_day(date_str)
-    d = to_krx_date(date_str)
-    p_d = to_krx_date(prev_str)
 
-    # 1. 데이터 가져오기
-    cap = stock.get_market_cap_by_ticker(d, market=market)
-    prev_ohlcv = stock.get_market_ohlcv_by_ticker(p_d, p_d, market=market)
+    cap = stock.get_market_cap_by_ticker(to_krx_date(date_str), market=market)
+    if cap is None or cap.empty:
+        raise RuntimeError(f"pykrx cap empty: date={date_str}, market={market}")
 
-    if cap.empty or prev_ohlcv.empty:
-        raise RuntimeError(f"데이터가 비어있습니다: {date_str} / {market}")
+    prev_ohlcv = stock.get_market_ohlcv_by_ticker(to_krx_date(prev_str), market=market)
+    if prev_ohlcv is None or prev_ohlcv.empty:
+        raise RuntimeError(f"pykrx ohlcv empty: date={prev_str}, market={market}")
 
-    # ✅ 유연한 컬럼 선택 (한글/영문 모두 대응)
-    # latest.json에서 발생한 KeyError(['종가', '시가총액' 등])를 방지합니다.
-    close_col = _pick_col(cap, ["종가", "현재가", "Close", "PRICE"])
-    mcap_col = _pick_col(cap, ["시가총액", "Market Cap", "MCAP"])
-    prev_close_col = _pick_col(prev_ohlcv, ["종가", "Close", "PRICE"])
+    # Helpful debug in CI logs (kept lightweight)
+    print(f"[Top10 Debug] {market} cap.columns = {list(cap.columns)}")
+    print(f"[Top10 Debug] {market} prev_ohlcv.columns = {list(prev_ohlcv.columns)}")
 
-    # 데이터 추출 및 정리
-    df = cap[[close_col, mcap_col]].copy().rename(columns={close_col: "close", mcap_col: "mcap"})
+    # Wider candidate lists (KR/EN + common variants)
+    close_col = _pick_col(cap, ["종가", "현재가", "Close", "close", "Last", "last"])
+    mcap_col = _pick_col(cap, ["시가총액", "시총", "Market Cap", "marketcap", "MarketCap", "mcap"])
+    prev_close_col = _pick_col(prev_ohlcv, ["종가", "현재가", "Close", "close", "Last", "last"])
+
+    df = cap[[close_col, mcap_col]].copy()
+    df = df.rename(columns={close_col: "close", mcap_col: "mcap"})
     df["ticker"] = df.index.astype(str)
     df["name"] = df["ticker"].map(stock.get_market_ticker_name)
 
-    prev_df = prev_ohlcv[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
-    df = df.merge(prev_df, left_index=True, right_index=True, how="left")
+    prev_close = prev_ohlcv[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
+    prev_close["ticker"] = prev_close.index.astype(str)
 
-    # 수익률 계산 및 상위 10개 추출
+    df = df.merge(prev_close.reset_index(drop=True), on="ticker", how="left")
+
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce")
+    df["mcap"] = pd.to_numeric(df["mcap"], errors="coerce")
+
     df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
-    return df.sort_values("mcap", ascending=False).head(10).reset_index(drop=True)
 
+    # Clean: mcap must be positive number for treemap sizing
+    df = df.dropna(subset=["mcap"]).copy()
+    df = df[df["mcap"] > 0]
+
+    df = df.sort_values("mcap", ascending=False).head(10).reset_index(drop=True)
+    return df[["ticker", "name", "close", "mcap", "return_1d"]]
 
 def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
     outpath.parent.mkdir(parents=True, exist_ok=True)
+
+    if df_top10 is None or df_top10.empty:
+        raise RuntimeError("Top10 DataFrame is empty: cannot draw treemap")
+
+    df_top10 = df_top10.copy()
+    df_top10["mcap"] = pd.to_numeric(df_top10["mcap"], errors="coerce")
+    df_top10 = df_top10.dropna(subset=["mcap"])
+    df_top10 = df_top10[df_top10["mcap"] > 0]
+
+    if df_top10.empty:
+        raise RuntimeError("Top10 DataFrame has no positive mcap rows: cannot draw treemap")
+
     sizes = df_top10["mcap"].astype(float).tolist()
     labels = [f"{r['name']}\n{float(r['return_1d']):+.2f}%" for _, r in df_top10.iterrows()]
 
@@ -186,7 +258,6 @@ def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
     plt.tight_layout()
     plt.savefig(outpath, dpi=150)
     plt.close()
-
 
 def fetch_volatility_top5(date_str: str, market: str) -> List[Dict[str, Any]]:
     prev_str = prev_business_day(date_str)
