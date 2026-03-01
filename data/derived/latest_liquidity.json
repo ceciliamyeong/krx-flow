@@ -8,10 +8,13 @@
     "foreign_net_x": null,
     "individual_ratio": null,
     "foreign_ratio": null,
-    "institution_ratio": 0.3004060465944596,
+    "institution_ratio": 0.30040604659445963,
     "institution_net_y": 4460000000000.0,
     "individual_net_y": null,
-    "foreign_net_y": null
+    "foreign_net_y": null,
+    "institution_net": 4460000000000.0,
+    "individual_net": null,
+    "foreign_net": null
   },
   "KOSPI": {
     "turnover_krw": 54939339000000.0,
@@ -21,9 +24,12 @@
     "foreign_net_x": null,
     "individual_ratio": null,
     "foreign_ratio": null,
-    "institution_ratio": 0.1032047364093696,
+    "institution_ratio": 0.10320473640936961,
     "institution_net_y": 5670000000000.0,
     "individual_net_y": null,
-    "foreign_net_y": null
+    "foreign_net_y": null,
+    "institution_net": 5670000000000.0,
+    "individual_net": null,
+    "foreign_net": null
   }
 }
