@@ -126,11 +126,17 @@ def norm_inv(x: str) -> str:
 def prev_business_day(date_str: str) -> str:
     from datetime import datetime, timedelta
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
-    start = (d - timedelta(days=14)).strftime("%Y-%m-%d")
-    days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
-    if not days or len(days) < 2:
-        raise RuntimeError(f"Cannot find previous business day for {date_str}")
-    return to_dash_date(days[-2])
+    # 넉넉하게 20일치 영업일을 조회해서 에러 방지
+    start = (d - timedelta(days=20)).strftime("%Y-%m-%d")
+    try:
+        days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
+        if not days or len(days) < 2:
+            # 만약 pykrx가 실패하면 강제로 하루 전 평일 계산 (비상용)
+            return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
+        return to_dash_date(days[-2])
+    except:
+        # 에러 발생 시 수동 계산 결과 반환
+        return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
 
 
 # ------------------------
