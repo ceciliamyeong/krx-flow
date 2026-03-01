@@ -111,6 +111,14 @@ def _read_investor_daily() -> pd.DataFrame:
     inv["net_krw"] = inv["net_raw"] * inv["mult"]
 
     # 우리가 원하는 3종만
+    inv["investor_type"] = inv["investor_type"].astype(str).str.strip()
+    inv["investor_type"] = inv["investor_type"].replace({
+        "개인": "individual",
+        "외국인": "foreign",
+        "기관": "institution_total",
+        "기관합계": "institution_total",
+        "기관계": "institution_total",
+    })
     keep = inv[inv["investor_type"].isin(["individual", "foreign", "institution_total"])].copy()
     if keep.empty:
         return pd.DataFrame(columns=["date", "market", "individual_net", "foreign_net", "institution_net"])
