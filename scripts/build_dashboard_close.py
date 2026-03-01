@@ -1,7 +1,8 @@
-print("RUNNING FILE:", __file__)
-print("VERSION: merge-removed-2026-03-01")
 
 from __future__ import annotations
+
+print("RUNNING FILE:", __file__)
+print("VERSION: merge-removed-2026-03-01")
 
 import json
 from pathlib import Path
