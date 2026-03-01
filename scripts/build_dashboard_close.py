@@ -396,24 +396,29 @@ def load_investor_pivot(inv: pd.DataFrame, date_str: str) -> pd.DataFrame:
 
 
 def build_market_cards(liq_day: pd.DataFrame, inv_pivot: pd.DataFrame) -> Dict[str, Any]:
-
-    # 🔥 중복 가능 컬럼 제거 (안전장치)
-    drop_cols = ["foreign_net", "institution_net", "individual_net"]
-    for c in drop_cols:
-        if c in liq_day.columns:
-            liq_day = liq_day.drop(columns=[c])
-
-    merged = liq_day.merge(inv_pivot, on=["date", "market"], how="left")
+    # inv_pivot을 market -> row dict 로 변환
+    inv_map: Dict[str, dict] = {}
+    if inv_pivot is not None and not inv_pivot.empty:
+        for _, r in inv_pivot.iterrows():
+            inv_map[str(r["market"])] = r.to_dict()
 
     markets: Dict[str, Any] = {}
-    for _, r in merged.iterrows():
+
+    for _, r in liq_day.iterrows():
         mk = str(r["market"])
+
         turnover = None if pd.isna(r.get("turnover_krw")) else float(r.get("turnover_krw"))
         close = None if pd.isna(r.get("close")) else float(r.get("close"))
 
-        foreign = None if pd.isna(r.get("foreign_net")) else float(r.get("foreign_net"))
-        inst = None if pd.isna(r.get("institution_net")) else float(r.get("institution_net"))
-        indiv = None if pd.isna(r.get("individual_net")) else float(r.get("individual_net"))
+        inv_row = inv_map.get(mk, {})
+
+        foreign = inv_row.get("foreign_net")
+        inst = inv_row.get("institution_net")
+        indiv = inv_row.get("individual_net")
+
+        foreign = None if foreign is None or pd.isna(foreign) else float(foreign)
+        inst = None if inst is None or pd.isna(inst) else float(inst)
+        indiv = None if indiv is None or pd.isna(indiv) else float(indiv)
 
         def ratio(v: Optional[float]) -> Optional[float]:
             if v is None or turnover is None or turnover == 0:
