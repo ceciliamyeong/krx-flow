@@ -254,128 +254,51 @@ def build_market_cards(liq_day: pd.DataFrame, inv_pivot: pd.DataFrame) -> Dict[s
     return markets
 
 
-# ------------------------
-# Top10 Treemap + Volatility + Breadth
-# ------------------------
-
-def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
-    ymd = date_str.replace("-", "")
-    mcap = stock.get_market_cap_by_ticker(ymd, market=market)
-    ohlcv = stock.get_market_ohlcv_by_ticker(ymd, market=market)
-
-    mcap_col = "시가총액" if "시가총액" in mcap.columns else mcap.select_dtypes("number").columns[0]
-    ret_col = "등락률" if "등락률" in ohlcv.columns else ("등락률(%)" if "등락률(%)" in ohlcv.columns else None)
-    if ret_col is None:
-        # best-effort fallback
-        if "종가" in ohlcv.columns and "전일종가" in ohlcv.columns:
-            ohlcv["__ret"] = (ohlcv["종가"] / ohlcv["전일종가"] - 1) * 100
-            ret_col = "__ret"
-        else:
-            ohlcv["__ret"] = 0.0
-            ret_col = "__ret"
-
-    df = (
-        mcap[[mcap_col]].rename(columns={mcap_col: "mcap"})
-        .join(ohlcv[[ret_col]].rename(columns={ret_col: "return_pct"}), how="left")
-        .reset_index()
-        .rename(columns={"티커": "ticker", "index": "ticker"})
-    )
-    df["ticker"] = df["ticker"].astype(str)
-    df["mcap"] = pd.to_numeric(df["mcap"], errors="coerce")
-    df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce")
-
-    df = df.dropna(subset=["mcap"]).sort_values("mcap", ascending=False).head(10).copy()
-    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
-    return df[["ticker", "name", "mcap", "return_pct"]].reset_index(drop=True)
-
-
-def make_treemap_png(df: pd.DataFrame, title: str, out_path: Path):
-    sizes = df["mcap"].astype(float).tolist()
-    labels = [
-        f"{n}\n{rp:+.2f}%"
-        for n, rp in zip(df["name"].tolist(), df["return_pct"].fillna(0.0).astype(float).tolist())
-    ]
-
-    # 코인판 감성: 상승=초록, 하락=빨강
-    colors = []
-    for rp in df["return_pct"].fillna(0.0).astype(float).tolist():
-        if rp > 0:
-            colors.append("#2E7D32")
-        elif rp < 0:
-            colors.append("#C62828")
-        else:
-            colors.append("#9E9E9E")
-
-    fig = plt.figure(figsize=(12, 7))
-    ax = fig.add_subplot(111)
-    ax.set_axis_off()
-    ax.set_title(title)
-
-    squarify.plot(
-        sizes=sizes,
-        label=labels,
-        color=colors,
-        alpha=0.9,
-        text_kwargs={"fontsize": 11},
-        ax=ax,
-    )
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=160)
-    plt.close(fig)
-
-
-def fetch_volatility_top5(date_str: str, market: str) -> List[Dict[str, Any]]:
-    """
-    '오늘 이슈' 카드: abs(등락률) 기준 Top5
-    """
-    ymd = date_str.replace("-", "")
-    ohlcv = stock.get_market_ohlcv_by_ticker(ymd, market=market)
-
-    ret_col = "등락률" if "등락률" in ohlcv.columns else ("등락률(%)" if "등락률(%)" in ohlcv.columns else None)
-    if ret_col is None:
-        if "종가" in ohlcv.columns and "전일종가" in ohlcv.columns:
-            ohlcv["__ret"] = (ohlcv["종가"] / ohlcv["전일종가"] - 1) * 100
-            ret_col = "__ret"
-        else:
-            ohlcv["__ret"] = 0.0
-            ret_col = "__ret"
-
-    df = ohlcv[[ret_col]].rename(columns={ret_col: "return_pct"}).copy()
-    df["return_pct"] = pd.to_numeric(df["return_pct"], errors="coerce").fillna(0.0)
-    df["abs_return"] = df["return_pct"].abs()
-    df = df.sort_values("abs_return", ascending=False).head(5).reset_index()
-
-    ticker_col = "티커" if "티커" in df.columns else df.columns[0]
-    df = df.rename(columns={ticker_col: "ticker"})
-    df["ticker"] = df["ticker"].astype(str)
-    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
-
-    return df[["ticker", "name", "return_pct"]].to_dict(orient="records")
-
-
-def fetch_breadth(date_str: str, market: str) -> Dict[str, int]:
-    """
-    상승/하락/보합 종목 수
-    """
-    ymd = date_str.replace("-", "")
-    ohlcv = stock.get_market_ohlcv_by_ticker(ymd, market=market)
-
-    ret_col = "등락률" if "등락률" in ohlcv.columns else ("등락률(%)" if "등락률(%)" in ohlcv.columns else None)
-    if ret_col is None:
-        if "종가" in ohlcv.columns and "전일종가" in ohlcv.columns:
-            ohlcv["__ret"] = (ohlcv["종가"] / ohlcv["전일종가"] - 1) * 100
-            ret_col = "__ret"
-        else:
-            ohlcv["__ret"] = 0.0
-            ret_col = "__ret"
-
-    s = pd.to_numeric(ohlcv[ret_col], errors="coerce").fillna(0.0)
-    return {
-        "up": int((s > 0).sum()),
-        "down": int((s < 0).sum()),
-        "flat": int((s == 0).sum()),
+    # Top10 treemap + data
+    top10: Dict[str, Any] = {}
+    treemap_png = {
+        "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
+        "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png",
     }
+
+    try:
+        for mk in ["KOSPI", "KOSDAQ"]:
+            df_top10 = fetch_top10_mcap_and_return(date_str, mk)
+            top10[mk] = df_top10.to_dict(orient="records")
+
+            make_treemap_png(
+                df_top10,
+                f"{mk} 시총 TOP10 — {date_str}",
+                OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png",
+            )
+
+        dashboard["extras"]["top10_treemap"] = top10
+        dashboard["extras"]["treemap_png"] = treemap_png
+
+    except Exception as e:
+        # pykrx 실패해도 latest.json은 반드시 생성되게
+        dashboard["extras"]["top10_treemap"] = {}
+        dashboard["extras"]["treemap_png"] = treemap_png
+        dashboard["extras"]["top10_error"] = str(e)
+
+    # Volatility top5 + Breadth (여기도 실패해도 진행)
+    try:
+        dashboard["extras"]["volatility_top5"] = {
+            "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
+            "KOSDAQ": fetch_volatility_top5(date_str, "KOSDAQ"),
+        }
+    except Exception as e:
+        dashboard["extras"]["volatility_top5"] = {}
+        dashboard["extras"]["volatility_error"] = str(e)
+
+    try:
+        dashboard["extras"]["breadth"] = {
+            "KOSPI": fetch_breadth(date_str, "KOSPI"),
+            "KOSDAQ": fetch_breadth(date_str, "KOSDAQ"),
+        }
+    except Exception as e:
+        dashboard["extras"]["breadth"] = {}
+        dashboard["extras"]["breadth_error"] = str(e)
 
 
 # ------------------------
