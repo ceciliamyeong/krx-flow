@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 print("RUNNING FILE:", __file__)
-print("VERSION: run_daily-final-10billion-forceclose-2026-03-01")
+print("VERSION: run_daily-final-safe-prev-2026-03-01")
 
 import json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 from pykrx import stock
@@ -13,11 +13,10 @@ from pykrx import stock
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# outputs
 HIST_LIQ = ROOT / "data" / "history" / "liquidity_daily.csv"
-INVESTOR_LONG_CSV = ROOT / "data" / "derived" / "investor_flow_daily.csv"          # long-form (개인(십억원) 형태)
-INVESTOR_PIVOT_CSV = ROOT / "data" / "derived" / "investor_flow_pivot_daily.csv"  # pivot (KRW)
-MERGED_CSV = ROOT / "data" / "derived" / "market_flow_daily.csv"                  # liquidity + investor pivot merge
+INVESTOR_LONG_CSV = ROOT / "data" / "derived" / "investor_flow_daily.csv"
+INVESTOR_PIVOT_CSV = ROOT / "data" / "derived" / "investor_flow_pivot_daily.csv"
+MERGED_CSV = ROOT / "data" / "derived" / "market_flow_daily.csv"
 DERIVED_DIR = ROOT / "data" / "derived"
 HISTORY_DIR = ROOT / "data" / "history"
 
@@ -27,10 +26,6 @@ FORCE_CLOSE_DATE = "2026-02-27"
 # ✅ 거래소 수급 단위: (십억원)
 RAW_UNIT_HINT = "(십억원)"
 
-
-# ------------------------
-# Helpers
-# ------------------------
 
 def ensure_dirs():
     DERIVED_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,7 +53,7 @@ def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
 def latest_business_day() -> str:
     from datetime import datetime, timedelta
     today = datetime.utcnow().date()
-    start = (today - timedelta(days=14)).strftime("%Y-%m-%d")
+    start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
     end = today.strftime("%Y-%m-%d")
     days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(end))
     if not days:
@@ -66,13 +61,27 @@ def latest_business_day() -> str:
     return to_dash_date(days[-1])
 
 
-def prev_business_day(date_str: str) -> str:
+def prev_business_day_safe(date_str: str, lookback_days: int = 60) -> Optional[str]:
+    """
+    ✅ 절대 raise 하지 않음. 못 찾으면 None 반환.
+    """
     from datetime import datetime, timedelta
-    d = datetime.strptime(date_str, "%Y-%m-%d").date()
-    start = (d - timedelta(days=14)).strftime("%Y-%m-%d")
-    days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
+
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+    start = (d - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+    try:
+        days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
+    except Exception:
+        return None
+
     if not days or len(days) < 2:
-        raise RuntimeError(f"Cannot find previous business day for {date_str}")
+        return None
+
     return to_dash_date(days[-2])
 
 
@@ -90,18 +99,11 @@ def _unit_mult(hint: str) -> float:
 
 
 def _norm_inv(t: str) -> str:
-    """
-    investor_type 정규화:
-      - '개인(십억원)' -> individual
-      - '외국인(십억원)' -> foreign
-      - '기관(십억원)' / '기관합계(십억원)' / 'institution_total' -> institution_total
-    """
     s = str(t).strip()
     if not s:
         return s
     base = s.split("(")[0].strip()
 
-    # english/internal
     if base in ["individual", "individual_total"]:
         return "individual"
     if base in ["foreign", "foreigner", "foreign_total"]:
@@ -109,7 +111,6 @@ def _norm_inv(t: str) -> str:
     if base in ["institution_total", "institution", "institutions"]:
         return "institution_total"
 
-    # korean
     if "개인" in base:
         return "individual"
     if "외국" in base:
@@ -125,10 +126,6 @@ def _norm_inv(t: str) -> str:
 # ------------------------
 
 def _fetch_market_index_liquidity(date_str: str) -> pd.DataFrame:
-    """
-    liquidity_daily.csv:
-      date, market, turnover_krw, close
-    """
     index_map = {"KOSPI": "1001", "KOSDAQ": "2001"}
     rows = []
 
@@ -150,7 +147,6 @@ def _fetch_market_index_liquidity(date_str: str) -> pd.DataFrame:
         close = float(pd.to_numeric(df.iloc[-1][close_col], errors="coerce"))
         tv_raw = pd.to_numeric(df.iloc[-1][value_col], errors="coerce")
 
-        # if '(억원)' column -> KRW
         turnover_krw = float(tv_raw) * 1e8 if "(억원)" in str(value_col) else float(tv_raw)
 
         rows.append({"date": date_str, "market": mk, "turnover_krw": turnover_krw, "close": close})
@@ -193,11 +189,6 @@ def _upsert_liquidity(date_str: str) -> pd.DataFrame:
 # ------------------------
 
 def _fetch_investor_long(date_str: str) -> pd.DataFrame:
-    """
-    investor_flow_daily.csv (long):
-      date, market, investor_type, bid_raw, ask_raw, net_raw, raw_unit_hint
-    investor_type는 '개인(십억원)' 형태로 저장, raw_unit_hint도 '(십억원)' 고정.
-    """
     rows = []
 
     for mk in ["KOSPI", "KOSDAQ"]:
@@ -281,10 +272,6 @@ def _upsert_investor_long(date_str: str) -> pd.DataFrame:
 
 
 def _read_investor_pivot_from_long(inv_long: pd.DataFrame) -> pd.DataFrame:
-    """
-    long -> pivot (KRW):
-      date, market, foreign_net, institution_net, individual_net
-    """
     cols = ["date", "market", "foreign_net", "institution_net", "individual_net"]
     if inv_long is None or inv_long.empty:
         return pd.DataFrame(columns=cols)
@@ -323,10 +310,6 @@ def _read_investor_pivot_from_long(inv_long: pd.DataFrame) -> pd.DataFrame:
     return pivot[["date", "market", "foreign_net", "institution_net", "individual_net"]]
 
 
-# ------------------------
-# Merge (SAFE)
-# ------------------------
-
 def _merge_investor(liquidity: pd.DataFrame, investor_pivot: pd.DataFrame) -> pd.DataFrame:
     if liquidity is None or liquidity.empty:
         return liquidity
@@ -336,7 +319,6 @@ def _merge_investor(liquidity: pd.DataFrame, investor_pivot: pd.DataFrame) -> pd
 
     net_cols = ["foreign_net", "institution_net", "individual_net"]
 
-    # drop suffix junk
     liq_suffix = [c for c in liquidity.columns if c.endswith("_x") or c.endswith("_y")]
     if liq_suffix:
         liquidity = liquidity.drop(columns=liq_suffix)
@@ -345,12 +327,10 @@ def _merge_investor(liquidity: pd.DataFrame, investor_pivot: pd.DataFrame) -> pd
     if inv_suffix:
         investor_pivot = investor_pivot.drop(columns=inv_suffix)
 
-    # liquidity should not have net cols
     liq_drop = [c for c in net_cols if c in liquidity.columns]
     if liq_drop:
         liquidity = liquidity.drop(columns=liq_drop)
 
-    # rename to avoid collision
     rename_map = {c: f"{c}__inv" for c in net_cols if c in investor_pivot.columns}
     if rename_map:
         investor_pivot = investor_pivot.rename(columns=rename_map)
@@ -362,40 +342,37 @@ def _merge_investor(liquidity: pd.DataFrame, investor_pivot: pd.DataFrame) -> pd
 
     out = liquidity.merge(investor_pivot, on=["date", "market"], how="left")
 
-    # restore names
     back_map = {v: k for k, v in rename_map.items()}
     if back_map:
         out = out.rename(columns=back_map)
 
-    # ensure no suffix columns remain
     drop_suffix_final = [c for c in out.columns if c.endswith("_x") or c.endswith("_y")]
     if drop_suffix_final:
         out = out.drop(columns=drop_suffix_final)
 
     denom = pd.to_numeric(out.get("turnover_krw", pd.Series([pd.NA] * len(out))), errors="coerce").replace({0: pd.NA})
 
+    for c in ["individual_net", "foreign_net", "institution_net"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+
     if "individual_net" in out.columns:
-        out["individual_net"] = pd.to_numeric(out["individual_net"], errors="coerce")
         out["individual_ratio"] = out["individual_net"] / denom
     if "foreign_net" in out.columns:
-        out["foreign_net"] = pd.to_numeric(out["foreign_net"], errors="coerce")
         out["foreign_ratio"] = out["foreign_net"] / denom
     if "institution_net" in out.columns:
-        out["institution_net"] = pd.to_numeric(out["institution_net"], errors="coerce")
         out["institution_ratio"] = out["institution_net"] / denom
 
     return out.sort_values(["date", "market"]).reset_index(drop=True)
 
 
-# ------------------------
-# Main
-# ------------------------
-
 def main():
     ensure_dirs()
 
     date_str = FORCE_CLOSE_DATE if FORCE_CLOSE_DATE else latest_business_day()
-    print("Target date:", date_str, "(prev:", prev_business_day(date_str), ")")
+
+    prev = prev_business_day_safe(date_str)
+    print("Target date:", date_str, "(prev:", (prev if prev else "N/A"), ")")
     print("Investor unit:", RAW_UNIT_HINT)
     print("FORCE_CLOSE_DATE:", FORCE_CLOSE_DATE)
 
