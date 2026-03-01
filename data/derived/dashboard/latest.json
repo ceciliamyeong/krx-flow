@@ -70,8 +70,8 @@
       "KOSPI": {},
       "KOSDAQ": {}
     },
-    "top10_error": "Cannot find previous business day for 2026-02-27",
-    "volatility_error": "Cannot find previous business day for 2026-02-27",
-    "breadth_error": "Cannot find previous business day for 2026-02-27"
+    "top10_error": "\"None of [Index(['종가', '시가총액', '거래량', '거래대금'], dtype='object')] are in the [columns]\"",
+    "volatility_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\"",
+    "breadth_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\""
   }
 }
