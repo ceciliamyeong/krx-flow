@@ -32,7 +32,7 @@ jobs:
         run: python scripts/run_daily.py
 
       - name: Build dashboard
-        run: python scripts/build_dashboard_close.py
+        run: python -u scripts/build_dashboard_close.py
 
       - name: Commit results
         run: |
@@ -42,8 +42,8 @@ jobs:
                   data/derived/charts \
                   data/history/liquidity_daily.csv \
                   data/derived/*.csv \
-                  data/derived/*.json || true
-                  add web || true
+                  data/derived/*.json \
+                  web || true
           git commit -m "Daily dashboard update" || echo "No changes"
           git pull --rebase || true
           git push
