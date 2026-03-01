@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 print("RUNNING FILE:", __file__)
-print("VERSION: run_daily-no-index-api-2026-03-01")
+print("VERSION: run_daily-no-index-api-sigfix-2026-03-01")
 
 import json
+import inspect
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -19,7 +20,7 @@ MERGED_CSV = ROOT / "data" / "derived" / "market_flow_daily.csv"
 DERIVED_DIR = ROOT / "data" / "derived"
 HISTORY_DIR = ROOT / "data" / "history"
 
-# ✅ 최종 마감일 강제
+# ✅ 최종 마감일 강제 (네가 말한 최종 마감일)
 FORCE_CLOSE_DATE = "2026-02-27"
 
 # ✅ 거래소 수급 단위: (십억원)
@@ -88,6 +89,9 @@ def _unit_mult(hint: str) -> float:
 
 
 def _norm_inv(t: str) -> str:
+    """
+    investor_type 값이 '개인(십억원)' 같이 들어오면 개인/외국인/기관_total로 normalize
+    """
     s = str(t).strip()
     if not s:
         return s
@@ -105,6 +109,10 @@ def _norm_inv(t: str) -> str:
     if "외국" in base:
         return "foreign"
     if "기관" in base:
+        return "institution_total"
+
+    # 이미 institution_total 등으로 들어올 수도
+    if "institution_total" in s:
         return "institution_total"
 
     return base
@@ -175,11 +183,59 @@ def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
     raise KeyError(f"None of candidates found: {candidates} / got={df.columns.tolist()}")
 
 
+def _call_trading_value_by_investor(date_str: str, mk: str) -> pd.DataFrame:
+    """
+    ✅ pykrx 버전별 시그니처 차이 대응:
+    - 어떤 버전은 (date, market) 위치인자
+    - 어떤 버전은 (date, market="KOSPI") 키워드
+    - 어떤 버전은 market 대신 mkt 같은 이름(드물지만 방어)
+    => 순서대로 시도해서 하나라도 되면 반환.
+    """
+    d = to_krx_date(date_str)
+
+    fn = stock.get_market_trading_value_by_investor
+
+    # 1) 위치 인자 (가장 안전)
+    try:
+        df = fn(d, mk)
+        return df
+    except TypeError:
+        pass
+
+    # 2) 키워드 market
+    try:
+        df = fn(d, market=mk)
+        return df
+    except TypeError:
+        pass
+
+    # 3) 키워드 mkt (혹시)
+    try:
+        df = fn(d, mkt=mk)
+        return df
+    except TypeError:
+        pass
+
+    # 4) 마지막: 시그니처 보고 가능한 키워드 찾아서 강제
+    try:
+        sig = inspect.signature(fn)
+        params = set(sig.parameters.keys())
+        kwargs = {}
+        if "market" in params:
+            kwargs["market"] = mk
+        elif "mkt" in params:
+            kwargs["mkt"] = mk
+        df = fn(d, **kwargs) if kwargs else fn(d)
+        return df
+    except Exception as e:
+        raise RuntimeError(f"pykrx get_market_trading_value_by_investor call failed for {date_str}/{mk}: {e}")
+
+
 def _fetch_investor_long(date_str: str) -> pd.DataFrame:
     rows = []
 
     for mk in MARKETS:
-        df = stock.get_market_trading_value_by_investor(to_krx_date(date_str), market=mk)
+        df = _call_trading_value_by_investor(date_str, mk)
         if df is None or df.empty:
             raise RuntimeError(f"investor trading value empty: date={date_str}, market={mk}")
 
@@ -192,6 +248,7 @@ def _fetch_investor_long(date_str: str) -> pd.DataFrame:
             ask_raw = pd.to_numeric(df.loc[inv_name, sell_col], errors="coerce")
             net_raw = pd.to_numeric(df.loc[inv_name, net_col], errors="coerce")
 
+            # investor_type은 사람이 읽기 쉽게 '(십억원)' suffix를 붙여 둠
             investor_type = f"{inv_name}{RAW_UNIT_HINT}"
 
             rows.append({
@@ -304,7 +361,7 @@ def _merge_investor(liquidity_day: pd.DataFrame, investor_pivot: pd.DataFrame) -
     if liq_drop:
         liquidity_day = liquidity_day.drop(columns=liq_drop)
 
-    # investor net 임시 rename
+    # investor net 임시 rename (충돌 원천 차단)
     rename_map = {c: f"{c}__inv" for c in net_cols if c in investor_pivot.columns}
     if rename_map:
         investor_pivot = investor_pivot.rename(columns=rename_map)
@@ -353,8 +410,10 @@ def main():
     # ✅ liquidity는 history에서만 읽어온다
     liq_day = _liquidity_day_from_history(date_str)
 
+    # ✅ investor long upsert
     inv_long_hist = _upsert_investor_long(date_str)
 
+    # ✅ pivot + merge
     inv_pivot = _read_investor_pivot_from_long(inv_long_hist)
     inv_pivot.to_csv(INVESTOR_PIVOT_CSV, index=False)
     print("Saved investor pivot:", INVESTOR_PIVOT_CSV, "rows=", len(inv_pivot))
@@ -363,6 +422,7 @@ def main():
     merged.to_csv(MERGED_CSV, index=False)
     print("Saved merged market flow:", MERGED_CSV, "rows=", len(merged))
 
+    # ✅ snapshot json (웹에서 바로 쓰기 좋게)
     latest_snapshot: Dict[str, Any] = {"date": date_str, "markets": {}}
     for _, r in merged.iterrows():
         mk = str(r["market"])
