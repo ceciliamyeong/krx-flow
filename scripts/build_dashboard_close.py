@@ -128,12 +128,16 @@ def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
 def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
     if ratio is None:
         return None
-    a = abs(float(ratio))
-    if a >= strong:
-        return "STRONG"
-    if a >= normal:
-        return "NORMAL"
-    return "WEAK"
+    r = float(ratio)
+    a = abs(r)
+
+    if a < normal:
+        return "WEAK_BUY" if r > 0 else ("WEAK_SELL" if r < 0 else "WEAK")
+
+    if a < strong:
+        return "NORMAL_BUY" if r > 0 else "NORMAL_SELL"
+
+    return "STRONG_BUY" if r > 0 else "STRONG_SELL"
 
 
 def unit_mult(raw_hint: str) -> float:
