@@ -39,89 +39,48 @@ FORCE_CLOSE_DATE = "2026-02-27"
 
 
 # ------------------------
-# KRX 12001 (전종목시세) fallback for Top10 treemap
+# Top10 treemap data collection (pykrx wrapper with column-safe logic)
 # ------------------------
 
-KRX_URL = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-
-def _krx_post_json(payload: Dict[str, str]) -> Dict[str, Any]:
-    """POST to KRX getJsonData.cmd and return JSON."""
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://data.krx.co.kr/",
-        "Origin": "https://data.krx.co.kr",
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    }
-    r = requests.post(KRX_URL, data=payload, headers=headers, timeout=60)
-    r.raise_for_status()
-    return r.json()
-
-def fetch_topN_from_krx_12001(date_str: str, market: str, n: int = 10) -> pd.DataFrame:
+def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
     """
-    Build TopN by market cap using KRX 12001 (전종목시세) endpoint.
-
-    market: 'KOSPI' -> mktId=STK, 'KOSDAQ' -> mktId=KSQ
-    Returns columns: ticker, name, close, mcap, return_1d
+    pykrx를 사용하여 시가총액 상위 10개 종목 데이터를 가져옵니다.
+    KeyError(['종가', '시가총액' 등]) 방지를 위해 유연한 컬럼 선택 로직을 사용합니다.
     """
-    mktId = "STK" if market == "KOSPI" else "KSQ"
+    d = to_krx_date(date_str)
+    
+    # 1. 시가총액 정보 가져오기 (MDCSTAT01501과 동일한 데이터)
+    df = stock.get_market_cap_by_ticker(d, market=market)
+    
+    if df is None or df.empty:
+        raise RuntimeError(f"pykrx 데이터 수집 실패: {date_str} / {market}")
 
-    payload = {
-        "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
-        "locale": "ko_KR",
-        "mktId": mktId,
-        "trdDd": date_str.replace("-", ""),
-        "share": "1",
-        "money": "1",
-        "csvxls_isNo": "false",
-    }
-    # KRX 12001: KOSDAQ(=KSQ)는 segTpCd가 함께 가는 케이스가 많고,
-    # KOSPI(=STK)는 segTpCd 없이도 동작(네트워크 캡처 기준)하는 경우가 있어 조건부로 추가.
-    if mktId == "KSQ":
-        payload["segTpCd"] = "ALL"
+    # 2. 컬럼명 유연하게 선택 (버전/환경 차이 방어)
+    # _pick_col 함수를 사용하여 후보군 중 존재하는 컬럼을 선택합니다.
+    close_col = _pick_col(df, ["종가", "현재가", "Close", "PRICE"])
+    mcap_col = _pick_col(df, ["시가총액", "Market Cap", "MCAP", "시가총액(원)"])
+    
+    # 등락률 컬럼 찾기 (없을 경우 0으로 처리하기 위해 안전하게 검색)
+    ret_col = next((c for c in df.columns if any(k in c for k in ["등락률", "Change", "Ratio"])), None)
 
+    # 3. 데이터 정리 및 상위 10개 추출
+    df = df.sort_values(mcap_col, ascending=False).head(10).copy()
+    
+    df["ticker"] = df.index.astype(str)
+    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
+    df["close"] = pd.to_numeric(df[close_col], errors="coerce")
+    df["mcap"] = pd.to_numeric(df[mcap_col], errors="coerce")
+    
+    # 등락률 데이터가 있다면 숫자로 변환, 없으면 0.0으로 기본값 설정
+    if ret_col:
+        df["return_1d"] = pd.to_numeric(df[ret_col], errors="coerce")
+    else:
+        df["return_1d"] = 0.0
 
-    j = _krx_post_json(payload)
+    # 불필요한 행 제거 및 최종 컬럼 반환
+    df = df.dropna(subset=["mcap"]).reset_index(drop=True)
+    return df[["ticker", "name", "close", "mcap", "return_1d"]]
 
-    # Find the first list-like block in response (keys often like 'OutBlock_1')
-    rows = None
-    for k, v in j.items():
-        if isinstance(v, list) and len(v) > 0:
-            rows = v
-            break
-    if rows is None:
-        raise RuntimeError(f"KRX response has no rows. keys={list(j.keys())}")
-
-    df = pd.DataFrame(rows)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    # Column pick (KRX usually provides these)
-    code_col = next(c for c in df.columns if "종목코드" in c)
-    name_col = next(c for c in df.columns if "종목명" in c)
-    close_col = next(c for c in df.columns if "종가" in c)
-    mcap_col = next(c for c in df.columns if "시가총액" in c)
-    ret_col = next((c for c in df.columns if "등락률" in c), None)
-
-    def to_num(series: pd.Series) -> pd.Series:
-        return pd.to_numeric(
-            series.astype(str)
-                  .str.replace(",", "", regex=False)
-                  .str.replace("%", "", regex=False),
-            errors="coerce",
-        )
-
-    out = df[[code_col, name_col, close_col, mcap_col] + ([ret_col] if ret_col else [])].copy()
-    out["ticker"] = out[code_col].astype(str).str.strip()
-    out["name"] = out[name_col].astype(str).str.strip()
-    out["close"] = to_num(out[close_col])
-    out["mcap"] = to_num(out[mcap_col])
-    out["return_1d"] = to_num(out[ret_col]) if ret_col else pd.NA
-
-    out = out.dropna(subset=["mcap"]).copy()
-    out = out[out["mcap"] > 0]
-    out = out.sort_values("mcap", ascending=False).head(n).reset_index(drop=True)
-    return out[["ticker", "name", "close", "mcap", "return_1d"]]
 
 # ------------------------
 # Utils
@@ -531,11 +490,14 @@ def main():
         },
     }
 
-    # Top10 treemap + data (KRX 12001 기반, 실패해도 latest.json 생성)
+  
+    # Top10 treemap + data (실패해도 latest.json 생성)
     try:
         TOP_N = 10
         for mk in ["KOSPI", "KOSDAQ"]:
-            df_top = fetch_topN_from_krx_12001(date_str, mk, n=TOP_N)
+            # 함수 이름을 정의된 이름과 일치시켰습니다.
+            df_top = fetch_top10_mcap_and_return(date_str, mk) 
+            
             # 프론트 호환을 위해 key/파일명은 top10 그대로 유지
             dashboard["extras"]["top10_treemap"][mk] = df_top.to_dict(orient="records")
 
@@ -546,6 +508,7 @@ def main():
             )
     except Exception as e:
         dashboard["extras"]["top10_error"] = str(e)
+        
 
     # Volatility
     try:
