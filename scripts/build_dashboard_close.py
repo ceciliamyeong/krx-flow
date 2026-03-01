@@ -65,9 +65,15 @@ def unit_mult(raw_hint: str) -> float:
 
 
 def norm_inv(x: str) -> str:
+    """
+    Normalize investor_type to: foreign / institution / individual
+    - handles variants like 외국인계/외국인합계/기관계/개인계 etc.
+    """
     s = str(x).strip()
+    if not s:
+        return s
 
-    # 영문/내부키
+    # english/internal keys
     if s in ["foreign", "foreigner", "foreign_total"]:
         return "foreign"
     if s in ["institution", "institution_total"]:
@@ -77,13 +83,12 @@ def norm_inv(x: str) -> str:
 
     base = s.split("(")[0].strip()
 
-    # 한글 변형들(합계/계 포함)
+    if "외국" in base:
+        return "foreign"
     if "기관" in base:
         return "institution"
     if "개인" in base:
         return "individual"
-    if "외국" in base:
-        return "foreign"
 
     return s
 
@@ -100,12 +105,10 @@ def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0
 
 
 def to_krx_date(s: str) -> str:
-    # 'YYYY-MM-DD' -> 'YYYYMMDD'
-    return str(s).replace("-", "")
+    return str(s).replace("-", "")  # 'YYYY-MM-DD' -> 'YYYYMMDD'
 
 
 def to_dash_date(s: str) -> str:
-    # 'YYYYMMDD' -> 'YYYY-MM-DD'
     s = str(s)
     if "-" not in s and len(s) == 8:
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
@@ -122,8 +125,6 @@ def _pick_col(df: pd.DataFrame, candidates: list[str]) -> str:
 def prev_business_day(date_str: str) -> str:
     """
     date_str: 'YYYY-MM-DD'
-    pykrx는 영업일 유틸/조회에서 YYYYMMDD를 기대하는 경우가 많아
-    내부적으로 KRX 포맷으로 변환해서 처리.
     """
     from datetime import datetime, timedelta
 
@@ -145,11 +146,6 @@ def prev_business_day(date_str: str) -> str:
 # ------------------------
 
 def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
-    """
-    market: 'KOSPI' or 'KOSDAQ'
-    return columns:
-      ticker, name, close, mcap, return_1d
-    """
     prev_str = prev_business_day(date_str)
 
     cap = stock.get_market_cap_by_ticker(to_krx_date(date_str), market=market)
@@ -200,9 +196,6 @@ def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
 
 
 def fetch_volatility_top5(date_str: str, market: str) -> list[dict[str, Any]]:
-    """
-    Volatility top5: 당일 등락률(%) 절대값 상위 5개.
-    """
     prev_str = prev_business_day(date_str)
 
     today = stock.get_market_ohlcv_by_ticker(to_krx_date(date_str), market=market)
@@ -229,23 +222,13 @@ def fetch_volatility_top5(date_str: str, market: str) -> list[dict[str, Any]]:
     df = df.dropna(subset=["return_1d", "abs_ret"]).sort_values("abs_ret", ascending=False).head(5)
     df["name"] = df["ticker"].map(stock.get_market_ticker_name)
 
-    out: list[dict[str, Any]] = []
-    for _, r in df.iterrows():
-        out.append(
-            {
-                "ticker": str(r["ticker"]),
-                "name": str(r["name"]),
-                "return_1d": float(r["return_1d"]),
-                "close": float(r["close"]),
-            }
-        )
-    return out
+    return [
+        {"ticker": str(r["ticker"]), "name": str(r["name"]), "return_1d": float(r["return_1d"]), "close": float(r["close"])}
+        for _, r in df.iterrows()
+    ]
 
 
 def fetch_breadth(date_str: str, market: str) -> dict[str, Any]:
-    """
-    Breadth = 상승/하락 종목 비율(ADV/DEC).
-    """
     prev_str = prev_business_day(date_str)
 
     today = stock.get_market_ohlcv_by_ticker(to_krx_date(date_str), market=market)
@@ -325,16 +308,10 @@ def load_inv_df() -> pd.DataFrame:
 
 
 def pick_latest_trade_date(liq: pd.DataFrame, inv: pd.DataFrame) -> str:
-    """
-    1) liquidity 최신 date를 후보로 잡고
-    2) 그 날짜에 investor 3종(개인/외국인/기관)이 없으면
-       investor가 존재하는 가장 가까운 과거 date로 후퇴
-    """
     if liq.empty:
         raise RuntimeError("liquidity_daily.csv is empty")
 
-    liq_dates = sorted(liq["date"].unique())
-    latest_liq = liq_dates[-1]
+    latest_liq = sorted(liq["date"].unique())[-1]
 
     if inv is None or inv.empty:
         return latest_liq
@@ -349,8 +326,7 @@ def pick_latest_trade_date(liq: pd.DataFrame, inv: pd.DataFrame) -> str:
     if has_core(latest_liq):
         return latest_liq
 
-    inv_dates = sorted(inv["date"].unique())
-    candidates = [d for d in inv_dates if d <= latest_liq]
+    candidates = [d for d in sorted(inv["date"].unique()) if d <= latest_liq]
     if not candidates:
         return latest_liq
 
@@ -374,7 +350,7 @@ def load_index_rows(liq: pd.DataFrame, date_str: str) -> pd.DataFrame:
 
 def load_investor_pivot(inv: pd.DataFrame, date_str: str) -> pd.DataFrame:
     """
-    Returns:
+    Returns columns:
       date, market, foreign_net, institution_net, individual_net (KRW)
     """
     if inv is None or inv.empty:
@@ -404,7 +380,9 @@ def load_investor_pivot(inv: pd.DataFrame, date_str: str) -> pd.DataFrame:
 
 
 def build_market_cards(liq_day: pd.DataFrame, inv_pivot: pd.DataFrame) -> Dict[str, Any]:
-    # inv_pivot을 market -> row dict 로 변환
+    """
+    NOTE: merge()를 쓰지 않는다. (_x/_y 중복 및 MergeError 원천 차단)
+    """
     inv_map: Dict[str, dict] = {}
     if inv_pivot is not None and not inv_pivot.empty:
         for _, r in inv_pivot.iterrows():
@@ -486,12 +464,12 @@ def main():
         "extras": {},
     }
 
-    # Top10 treemap + data (실패해도 전체 생성은 되도록)
     treemap_png = {
         "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
         "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png",
     }
 
+    # Top10 treemap + data (실패해도 latest.json은 반드시 생성)
     try:
         top10: Dict[str, Any] = {}
         for mk in ["KOSPI", "KOSDAQ"]:
@@ -506,13 +484,12 @@ def main():
 
         dashboard["extras"]["top10_treemap"] = top10
         dashboard["extras"]["treemap_png"] = treemap_png
-
     except Exception as e:
         dashboard["extras"]["top10_treemap"] = {}
         dashboard["extras"]["treemap_png"] = treemap_png
         dashboard["extras"]["top10_error"] = str(e)
 
-    # Volatility top5 + Breadth (여기도 실패해도 진행)
+    # Volatility top5
     try:
         dashboard["extras"]["volatility_top5"] = {
             "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
@@ -522,6 +499,7 @@ def main():
         dashboard["extras"]["volatility_top5"] = {}
         dashboard["extras"]["volatility_error"] = str(e)
 
+    # Breadth
     try:
         dashboard["extras"]["breadth"] = {
             "KOSPI": fetch_breadth(date_str, "KOSPI"),
@@ -531,7 +509,6 @@ def main():
         dashboard["extras"]["breadth"] = {}
         dashboard["extras"]["breadth_error"] = str(e)
 
-    # archive + latest
     archive_path = OUT_ARCHIVE / f"{date_str}.json"
     latest_path = OUT_BASE / "latest.json"
 
