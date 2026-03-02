@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 print("RUNNING FILE:", __file__)
-print("VERSION: build_dashboard_close-v3-FULL-INTEGRATED-2026-03-02")
+print("VERSION: build_dashboard_close-v4-EXACT-USER-LOGIC-2026-03-02")
 
 import json
 from pathlib import Path
@@ -23,8 +23,6 @@ import squarify
 ROOT = Path(__file__).resolve().parents[1]
 
 HIST_LIQ = ROOT / "data" / "history" / "liquidity_daily.csv"
-
-# ✅ 우선 pivot을 읽고, 없으면 long-form을 읽어서 pivot 생성
 INV_PIVOT = ROOT / "data" / "derived" / "investor_flow_pivot_daily.csv"
 INV_LONG = ROOT / "data" / "derived" / "investor_flow_daily.csv"
 
@@ -34,7 +32,7 @@ OUT_CHART = ROOT / "data" / "derived" / "charts"
 
 
 # ---------------------------------------------------------
-# ✅ 사용자 수정본 반영: Naver Top10 수집 (인코딩 & StringIO 완벽 반영)
+# ✅ 사용자 로직: Naver Top10 (v2-UNITFIX와 100% 동일)
 # ---------------------------------------------------------
 def fetch_top10_from_naver(market: str) -> pd.DataFrame:
     import re
@@ -52,8 +50,6 @@ def fetch_top10_from_naver(market: str) -> pd.DataFrame:
 
     r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
-
-    # 🔥 사용자 수정 포인트: CI 인코딩 깨짐 방지
     r.encoding = "euc-kr"
 
     tables = pd.read_html(StringIO(r.text), match="종목명")
@@ -90,8 +86,7 @@ def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
     try:
         d = to_krx_date(date_str)
         df = stock.get_market_cap_by_ticker(d, market=market)
-        if df is None or df.empty:
-            raise RuntimeError("pykrx empty")
+        if df is None or df.empty: raise RuntimeError("pykrx empty")
 
         close_col = _pick_col(df, ["종가", "현재가", "Close"])
         mcap_col  = _pick_col(df, ["시가총액", "상장시가총액", "Market Cap"])
@@ -107,97 +102,14 @@ def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
         out = df[["ticker", "name", "close", "mcap", "return_1d"]]
         out = out.dropna(subset=["mcap"]).reset_index(drop=True)
         out["ticker"] = out["ticker"].fillna("").astype(str)
-
-        if out.empty:
-            raise RuntimeError("pykrx cleaned empty")
-
         return out
-
     except Exception as e:
         print(f"[Top10] pykrx failed -> fallback to Naver ({market})", e)
         return fetch_top10_from_naver(market)
 
 
 # ---------------------------------------------------------
-# ✅ Utils
-# ---------------------------------------------------------
-def ensure_dirs():
-    OUT_BASE.mkdir(parents=True, exist_ok=True)
-    OUT_ARCHIVE.mkdir(parents=True, exist_ok=True)
-    OUT_CHART.mkdir(parents=True, exist_ok=True)
-
-def krw_readable(x: Optional[float]) -> Optional[str]:
-    if x is None: return None
-    try: v = float(x)
-    except: return None
-    a = abs(v)
-    if a >= 1e12: return f"{v/1e12:+.2f}조"
-    if a >= 1e8: return f"{v/1e8:+.0f}억"
-    return f"{v:+.0f}"
-
-def to_krx_date(s: str) -> str: return str(s).replace("-", "")
-
-def to_dash_date(s: str) -> str:
-    s = str(s)
-    if "-" not in s and len(s) == 8: return f"{s[:4]}-{s[4:6]}-{s[6:]}"
-    return s
-
-def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
-    cols = list(df.columns)
-    for c in candidates:
-        if c in cols: return c
-    lower_map = {str(col).lower(): col for col in cols}
-    for c in candidates:
-        key = str(c).lower()
-        if key in lower_map: return lower_map[key]
-    for col in cols:
-        col_l = str(col).lower()
-        for c in candidates:
-            if str(c).lower() in col_l: return col
-    raise KeyError(f"Column not found: {candidates}")
-
-def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
-    if ratio is None: return None
-    r = float(ratio)
-    a = abs(r)
-    if a < normal: return "WEAK_BUY" if r > 0 else ("WEAK_SELL" if r < 0 else "WEAK")
-    if a < strong: return "NORMAL_BUY" if r > 0 else "NORMAL_SELL"
-    return "STRONG_BUY" if r > 0 else "STRONG_SELL"
-
-def unit_mult(raw_hint: str) -> float:
-    s = str(raw_hint)
-    if "(십억원)" in s: return 1e9
-    if "(억원)" in s: return 1e8
-    if "(백만원)" in s: return 1e6
-    if "(천원)" in s: return 1e3
-    return 1.0
-
-def norm_inv(x: str) -> str:
-    s = str(x).strip()
-    if not s: return s
-    base = s.split("(")[0].strip()
-    if "외국" in base: return "foreign"
-    if "기관" in base or base in ["institution_total", "institution"]: return "institution"
-    if "개인" in base: return "individual"
-    if base in ["foreign", "foreigner", "foreign_total"]: return "foreign"
-    if base in ["individual", "individual_total"]: return "individual"
-    return base
-
-def prev_business_day(date_str: str) -> str:
-    from datetime import datetime, timedelta
-    d = datetime.strptime(date_str, "%Y-%m-%d").date()
-    start = (d - timedelta(days=20)).strftime("%Y-%m-%d")
-    try:
-        days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
-        if not days or len(days) < 2:
-            return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
-        return to_dash_date(days[-2])
-    except:
-        return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
-
-
-# ---------------------------------------------------------
-# ✅ 사용자 수정본 반영: Naver Upjong 수집 (KeyError 방지 로직 완벽 반영)
+# ✅ 사용자 로직: Naver Upjong (v2-UNITFIX와 100% 동일)
 # ---------------------------------------------------------
 def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
     import pandas as pd
@@ -213,7 +125,7 @@ def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
 
     r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
-    r.encoding = "euc-kr"  # ✅ 사용자 수정 포인트: 한글 깨짐 방지
+    r.encoding = "euc-kr"
 
     tables = pd.read_html(StringIO(r.text))
     if not tables:
@@ -221,6 +133,7 @@ def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
 
     df = tables[0].copy()
     
+    # 🔥 사용자 로직: 복잡한 MultiIndex/Unnamed 처리 그대로 유지
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [
             (str(a).strip() if "Unnamed" not in str(a) else str(b).strip())
@@ -231,7 +144,6 @@ def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
     else:
         df.columns = [str(c).strip() for c in df.columns]
     
-    # ✅ 사용자 수정 포인트: 업종명 컬럼 자동 탐색 후 dropna
     name_col = next((c for c in df.columns if "업종" in str(c)), None)
     if name_col is None:
         raise RuntimeError(f"Naver upjong: name col not found. columns={list(df.columns)}")
@@ -239,7 +151,6 @@ def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
     df = df.dropna(subset=[name_col]).copy()
     df.rename(columns={name_col: "업종명"}, inplace=True)
 
-    # ✅ 사용자 수정 포인트: 등락률 컬럼 찾기(보통 '전일대비')
     ret_col = None
     for c in df.columns:
         if "전일대비" in str(c) or "등락률" in str(c):
@@ -266,9 +177,70 @@ def fetch_upjong_top_bottom3_from_naver() -> Dict[str, List[Dict[str, Any]]]:
 
 
 # ---------------------------------------------------------
-# ✅ Extras: Treemap, Volatility, Breadth
+# ✅ 나머지 Utils 및 Main (사용자 v2-UNITFIX 흐름 그대로)
 # ---------------------------------------------------------
-def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path, market: str = "") -> None:
+def ensure_dirs():
+    for p in [OUT_BASE, OUT_ARCHIVE, OUT_CHART]: p.mkdir(parents=True, exist_ok=True)
+
+def krw_readable(x):
+    if x is None: return None
+    try: v = float(x)
+    except: return None
+    a = abs(v)
+    if a >= 1e12: return f"{v/1e12:+.2f}조"
+    if a >= 1e8: return f"{v/1e8:+.0f}억"
+    return f"{v:+.0f}"
+
+def to_krx_date(s: str) -> str: return str(s).replace("-", "")
+def to_dash_date(s: str) -> str:
+    s = str(s)
+    if "-" not in s and len(s) == 8: return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+def _pick_col(df, candidates):
+    cols = list(df.columns)
+    for c in candidates:
+        if c in cols: return c
+    lower_map = {str(col).lower(): col for col in cols}
+    for c in candidates:
+        if str(c).lower() in lower_map: return lower_map[str(c).lower()]
+    raise KeyError(f"Column not found: {candidates}")
+
+def signal_label(ratio, strong=0.05, normal=0.02):
+    if ratio is None: return None
+    r = float(ratio); a = abs(r)
+    if a < normal: return "WEAK_BUY" if r > 0 else ("WEAK_SELL" if r < 0 else "WEAK")
+    if a < strong: return "NORMAL_BUY" if r > 0 else "NORMAL_SELL"
+    return "STRONG_BUY" if r > 0 else "STRONG_SELL"
+
+def unit_mult(raw_hint: str) -> float:
+    s = str(raw_hint)
+    if "(십억원)" in s: return 1e9
+    if "(억원)" in s: return 1e8
+    if "(백만원)" in s: return 1e6
+    if "(천원)" in s: return 1e3
+    return 1.0
+
+def norm_inv(x: str) -> str:
+    s = str(x).strip()
+    if not s: return s
+    base = s.split("(")[0].strip()
+    if "외국" in base: return "foreign"
+    if "기관" in base or base in ["institution_total", "institution"]: return "institution"
+    if "개인" in base: return "individual"
+    return base
+
+def prev_business_day(date_str: str) -> str:
+    from datetime import datetime, timedelta
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    start = (d - timedelta(days=20)).strftime("%Y-%m-%d")
+    try:
+        days = stock.get_previous_business_days(fromdate=to_krx_date(start), todate=to_krx_date(date_str))
+        if not days or len(days) < 2: return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
+        return to_dash_date(days[-2])
+    except: return (d - timedelta(days=1 if d.weekday() != 0 else 3)).strftime("%Y-%m-%d")
+
+def make_treemap_png(df_top10, title, outpath, market=""):
     import matplotlib.colors as mcolors
     outpath.parent.mkdir(parents=True, exist_ok=True)
     if df_top10 is None or df_top10.empty: return
@@ -289,9 +261,7 @@ def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path, market: 
         a, b = mcolors.to_rgb(c1), mcolors.to_rgb(c2)
         return tuple(a[i] * (1 - t) + b[i] * t for i in range(3))
     def ret_to_color(ret):
-        if ret is None or pd.isna(ret): return "#DDDDDD"
-        r = float(ret)
-        t = min(abs(r) / vmax, 1.0)
+        r = float(ret); t = min(abs(r) / vmax, 1.0)
         return lerp(red_light, red_dark, t) if r > 0 else (lerp(blue_light, blue_dark, t) if r < 0 else "#F2F2F2")
     colors = [ret_to_color(x) for x in rets]
     plt.figure(figsize=(10, 6))
@@ -299,50 +269,39 @@ def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path, market: 
     plt.title(f"{title} (색상기준 ±{vmax:.1f}%)")
     plt.axis("off")
     plt.tight_layout()
-    plt.savefig(outpath, dpi=150)
-    plt.close()
+    plt.savefig(outpath, dpi=150); plt.close()
 
-def fetch_volatility_top5(date_str: str, market: str) -> List[Dict[str, Any]]:
-    prev_str = prev_business_day(date_str)
+def fetch_volatility_top5(date_str, market):
+    p_str = prev_business_day(date_str)
     today = stock.get_market_ohlcv_by_ticker(to_krx_date(date_str), market=market)
-    prev = stock.get_market_ohlcv_by_ticker(to_krx_date(prev_str), market=market)
-    if today is None or today.empty or prev is None or prev.empty: return []
+    prev = stock.get_market_ohlcv_by_ticker(to_krx_date(p_str), market=market)
+    if today.empty or prev.empty: return []
     c_col = _pick_col(today, ["종가", "Close"])
-    p_c_col = _pick_col(prev, ["종가", "Close"])
     df = today[[c_col]].copy().rename(columns={c_col: "close"})
     df["ticker"] = df.index.astype(str)
-    p_df = prev[[p_c_col]].copy().rename(columns={p_c_col: "prev_close"})
+    p_df = prev[[_pick_col(prev, ["종가", "Close"])]].copy().rename(columns={_pick_col(prev, ["종가", "Close"]): "prev_close"})
     p_df["ticker"] = p_df.index.astype(str)
-    df = df.merge(p_df.reset_index(drop=True), on="ticker", how="left")
+    df = df.merge(p_df, on="ticker", how="left")
     df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
-    df = df.dropna(subset=["return_1d"]).sort_values("return_1d", key=abs, ascending=False).head(5)
+    df = df.dropna().sort_values("return_1d", key=abs, ascending=False).head(5)
     df["name"] = df["ticker"].map(stock.get_market_ticker_name)
     return [{"ticker": str(r["ticker"]), "name": str(r["name"]), "return_1d": float(r["return_1d"]), "close": float(r["close"])} for _, r in df.iterrows()]
 
-def fetch_breadth(date_str: str, market: str) -> Dict[str, Any]:
-    prev_str = prev_business_day(date_str)
+def fetch_breadth(date_str, market):
     today = stock.get_market_ohlcv_by_ticker(to_krx_date(date_str), market=market)
-    prev = stock.get_market_ohlcv_by_ticker(to_krx_date(prev_str), market=market)
-    if today is None or today.empty or prev is None or prev.empty: return {}
+    p_str = prev_business_day(date_str); prev = stock.get_market_ohlcv_by_ticker(to_krx_date(p_str), market=market)
+    if today.empty or prev.empty: return {}
     c_col = _pick_col(today, ["종가", "Close"])
-    p_c_col = _pick_col(prev, ["종가", "Close"])
     df = today[[c_col]].copy().rename(columns={c_col: "close"})
-    p_df = prev[[p_c_col]].copy().rename(columns={p_c_col: "prev_close"})
+    p_df = prev[[_pick_col(prev, ["종가", "Close"])]].copy().rename(columns={_pick_col(prev, ["종가", "Close"]): "prev_close"})
     df = df.merge(p_df, left_index=True, right_index=True, how="left")
-    df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
-    df = df.dropna(subset=["return_1d"])
-    adv = int((df["return_1d"] > 0).sum()); dec = int((df["return_1d"] < 0).sum())
-    total = len(df)
+    df["ret"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
+    df = df.dropna(); total = len(df); adv = int((df["ret"] > 0).sum()); dec = int((df["ret"] < 0).sum())
     return {"date": date_str, "market": market, "adv": adv, "dec": dec, "unch": total-adv-dec, "total": total, "adv_ratio": adv/total if total>0 else 0}
 
-
-# ---------------------------------------------------------
-# ✅ Data Load & Cleanup (NaT 방어 추가)
-# ---------------------------------------------------------
-def load_liq_df() -> pd.DataFrame:
-    if not HIST_LIQ.exists(): raise FileNotFoundError(f"Missing {HIST_LIQ}")
+def load_liq_df():
     liq = pd.read_csv(HIST_LIQ)
-    # 🔥 NaT 방어: 날짜 정제 로직 추가
+    # 🔥 NaT 방어: 날짜 정제 로직 필수
     liq["date"] = pd.to_datetime(liq["date"], errors="coerce")
     liq = liq.dropna(subset=["date"]).copy()
     liq["date"] = liq["date"].dt.date.astype(str)
@@ -351,7 +310,7 @@ def load_liq_df() -> pd.DataFrame:
     liq["close"] = pd.to_numeric(liq.get("close"), errors="coerce")
     return liq.sort_values(["date", "market"]).reset_index(drop=True)
 
-def load_inv_df() -> pd.DataFrame:
+def load_inv_df():
     if INV_PIVOT.exists():
         inv = pd.read_csv(INV_PIVOT)
         if not inv.empty:
@@ -360,83 +319,46 @@ def load_inv_df() -> pd.DataFrame:
             return inv.dropna(subset=["date"])
     return pd.DataFrame()
 
-
-def load_index_rows(liq: pd.DataFrame, date_str: str) -> pd.DataFrame:
-    day = liq[liq["date"] == date_str].copy()
-    if day.empty: raise RuntimeError(f"No liquidity rows for date={date_str}")
-    return day.sort_values(["market"]).reset_index(drop=True)
-
-
-def build_market_cards(liq_day: pd.DataFrame, inv_day: pd.DataFrame) -> Dict[str, Any]:
+def build_market_cards(liq_day, inv_day):
     inv_map = {str(r["market"]): r.to_dict() for _, r in inv_day.iterrows()} if not inv_day.empty else {}
     markets = {}
     for _, r in liq_day.iterrows():
-        mk = str(r["market"])
-        turnover = float(r["turnover_krw"]) if pd.notna(r.get("turnover_krw")) else 0
+        mk = str(r["market"]); turnover = float(r["turnover_krw"]) if pd.notna(r.get("turnover_krw")) else 0
         inv_row = inv_map.get(mk, {})
-        f_net = float(inv_row.get("foreign_net", 0)) if pd.notna(inv_row.get("foreign_net")) else 0
-        i_net = float(inv_row.get("institution_net", 0)) if pd.notna(inv_row.get("institution_net")) else 0
-        d_net = float(inv_row.get("individual_net", 0)) if pd.notna(inv_row.get("individual_net")) else 0
-        ratio_f = f_net/turnover if turnover > 0 else 0
+        f_net = float(inv_row.get("foreign_net", 0)); i_net = float(inv_row.get("institution_net", 0)); d_net = float(inv_row.get("individual_net", 0))
         markets[mk] = {
-            "close": float(r["close"]),
-            "turnover_krw": turnover,
-            "turnover_readable": krw_readable(turnover),
-            "investor_net_krw": {"foreign": f_net, "institution": i_net, "individual": d_net},
+            "close": float(r["close"]), "turnover_readable": krw_readable(turnover),
             "investor_net_readable": {"foreign": krw_readable(f_net), "institution": krw_readable(i_net), "individual": krw_readable(d_net)},
-            "investor_ratio": {"foreign": ratio_f},
-            "flow_signal": {"foreign": signal_label(ratio_f)}
+            "flow_signal": {"foreign": signal_label(f_net/turnover if turnover>0 else 0)}
         }
     return markets
 
-
-# ---------------------------------------------------------
-# ✅ Main
-# ---------------------------------------------------------
 def main():
-    ensure_dirs()
-    liq = load_liq_df()
-    inv = load_inv_df()
-
-    # 🔥 NaT 제외 유효한 날짜 중 최신값 선택
+    ensure_dirs(); liq = load_liq_df(); inv = load_inv_df()
+    # ✅ NaT 제외하고 유효한 날짜 중 최신값 선택
     valid_dates = sorted([d for d in liq["date"].unique() if d and d != "NaT"])
     if not valid_dates: return
-    date_str = valid_dates[-1]
-    print("Dashboard date:", date_str)
-
-    liq_day = load_index_rows(liq, date_str)
-    inv_day = inv[inv["date"] == date_str].copy() if not inv.empty else pd.DataFrame()
-
+    date_str = valid_dates[-1]; print("Dashboard date:", date_str)
+    liq_day = liq[liq["date"] == date_str]; inv_day = inv[inv["date"] == date_str] if not inv.empty else pd.DataFrame()
     dashboard = {
-        "date": date_str,
-        "version": "1.0",
-        "markets": build_market_cards(liq_day, inv_day),
+        "date": date_str, "version": "1.4", "markets": build_market_cards(liq_day, inv_day),
         "extras": {
             "top10_treemap": {"KOSPI": [], "KOSDAQ": []},
-            "treemap_png": {"KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png", "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png"},
-            "volatility_top5": {"KOSPI": [], "KOSDAQ": []},
-            "breadth": {"KOSPI": {}, "KOSDAQ": {}},
-            "upjong": fetch_upjong_top_bottom3_from_naver()
+            "upjong": fetch_upjong_top_bottom3_from_naver(), # ✅ 사용자 원본 함수 호출
+            "volatility_top5": {m: fetch_volatility_top5(date_str, m) for m in ["KOSPI", "KOSDAQ"]},
+            "breadth": {m: fetch_breadth(date_str, m) for m in ["KOSPI", "KOSDAQ"]}
         }
     }
-
     for mk in ["KOSPI", "KOSDAQ"]:
-        try:
-            df_top = fetch_top10_mcap_and_return(date_str, mk)
-            dashboard["extras"]["top10_treemap"][mk] = df_top.to_dict(orient="records")
-            make_treemap_png(df_top, f"{mk} 시총 TOP10 - {date_str}", OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png", market=mk)
-            dashboard["extras"]["volatility_top5"][mk] = fetch_volatility_top5(date_str, mk)
-            dashboard["extras"]["breadth"][mk] = fetch_breadth(date_str, mk)
-        except Exception as e:
-            print(f"Error {mk}: {e}")
-
+        df_top = fetch_top10_mcap_and_return(date_str, mk)
+        dashboard["extras"]["top10_treemap"][mk] = df_top.to_dict(orient="records")
+        make_treemap_png(df_top, f"{mk} TOP10", OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png", market=mk)
     import math
     def sanitize(obj):
         if isinstance(obj, float) and math.isnan(obj): return None
         if isinstance(obj, dict): return {k: sanitize(v) for k, v in obj.items()}
         if isinstance(obj, list): return [sanitize(v) for v in obj]
         return obj
-
     dashboard = sanitize(dashboard)
     (OUT_BASE / "latest.json").write_text(json.dumps(dashboard, ensure_ascii=False, indent=2), encoding="utf-8")
     (OUT_ARCHIVE / f"{date_str}.json").write_text(json.dumps(dashboard, ensure_ascii=False, indent=2), encoding="utf-8")
