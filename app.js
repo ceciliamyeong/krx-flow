@@ -62,5 +62,7 @@ function render() {
   setFlow("individual", m.investor_net_krw.individual, "개인");
 
   document.getElementById("treemap").src =
-    `${BASE}/data/derived/charts/treemap_${currentMarket.toLowerCase()}_top10_latest.png`;
+    "./data/derived/charts/treemap_" +
+    currentMarket.toLowerCase() +
+    "_top10_latest.png";
 }
