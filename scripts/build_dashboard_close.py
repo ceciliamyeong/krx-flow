@@ -42,7 +42,11 @@ def fetch_top10_from_naver(market: str) -> pd.DataFrame:
 
     sosok = "0" if market.upper() == "KOSPI" else "1"
     url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page=1"
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
+    headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Referer": "https://finance.naver.com/",
+      "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
 
     r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
