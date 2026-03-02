@@ -47,6 +47,10 @@ def compute_signals(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_latest_summary(sig: pd.DataFrame) -> dict:
+    sig = sig.copy()
+    sig["date"] = pd.to_datetime(sig["date"], errors="coerce")
+    sig = sig.dropna(subset=["date"])
+    
     latest_date = sig["date"].max()
     latest = sig[sig["date"] == latest_date].copy()
 
