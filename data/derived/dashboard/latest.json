@@ -212,6 +212,11 @@
       "KOSPI": {},
       "KOSDAQ": {}
     },
+    "upjong": {
+      "top": [],
+      "bottom": []
+    },
+    "upjong_error": "['업종명']",
     "volatility_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\"",
     "breadth_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\""
   }
