@@ -21,7 +21,7 @@ import squarify
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FORCE_CLOSE_DATE = "2026-02-27"  # ✅ run_daily와 동일하게 2월 27일로 설정
+
 
 HIST_LIQ = ROOT / "data" / "history" / "liquidity_daily.csv"
 
@@ -33,8 +33,7 @@ OUT_BASE = ROOT / "data" / "derived" / "dashboard"
 OUT_ARCHIVE = OUT_BASE / "archive"
 OUT_CHART = ROOT / "data" / "derived" / "charts"
 
-# ✅ 최종 마감일 강제 (None이면 자동)
-FORCE_CLOSE_DATE = "2026-02-27"
+
 
 
 
@@ -463,9 +462,8 @@ def main():
     liq = load_liq_df()
     inv = load_inv_df()
 
-    date_str = FORCE_CLOSE_DATE if FORCE_CLOSE_DATE else sorted(liq["date"].unique())[-1]
-    print("FORCE_CLOSE_DATE:", FORCE_CLOSE_DATE)
-    print("Dashboard date:", date_str)
+    date_str = sorted(liq["date"].unique())[-1]   # 가장 최근 데이터 자동 선택
+    print("Dashboard date:", date_str))
 
     liq_day = load_index_rows(liq, date_str)
     inv_day = inv[inv["date"] == date_str].copy() if inv is not None and not inv.empty else pd.DataFrame()
