@@ -119,18 +119,15 @@ def to_dash_date(s: str) -> str:
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
-    # 1. 후보군 중 정확히 일치하는 컬럼이 있는지 확인
     for c in candidates:
         if c in df.columns:
             return c
-    
-    # 2. 정확히 일치하는 게 없다면, 후보 단어가 포함된 컬럼을 찾음 (KRX '상장시가총액' 등 대응)
+    # 키워드 포함 확인 (예: '시가총액'이라는 단어가 들어간 컬럼 찾기)
     for c in candidates:
         for col in df.columns:
             if c in str(col):
                 return col
-                
-    raise KeyError(f"검색 후보 {candidates}를 찾을 수 없습니다. 현재 컬럼: {df.columns.tolist()}")
+    raise KeyError(f"필요한 컬럼을 찾을 수 없습니다: {candidates}")
 
 def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
     if ratio is None:
@@ -202,30 +199,28 @@ def prev_business_day(date_str: str) -> str:
 # ------------------------
 
 def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
-    # 1. 시가총액 및 종목 정보 가져오기
-    cap = stock.get_market_cap_by_ticker(to_krx_date(date_str), market=market)
+    d = to_krx_date(date_str)
+    # pykrx가 사용자가 주신 주소의 데이터를 호출합니다.
+    df = stock.get_market_cap_by_ticker(d, market=market)
     
-    if cap is None or cap.empty:
-        raise RuntimeError(f"pykrx 데이터 수집 실패: {date_str} / {market}")
+    if df is None or df.empty:
+        raise RuntimeError(f"데이터 수집 실패: {date_str}")
 
-    # 2. 컬럼명 유연하게 선택 (KRX 캡처본 기준: '현재가', '상장시가총액', '등락률')
-    close_col = _pick_col(cap, ["종가", "현재가", "Close"])
-    mcap_col = _pick_col(cap, ["시가총액", "상장시가", "Market Cap"])
-    # 캡처본에 '등락률'이 명시되어 있으므로 후보군에 추가 [cite: 30, 87]
-    ret_col = _pick_col(cap, ["등락률", "Change", "Ratio"])
+    # 캡처본에서 확인된 실제 컬럼명 매핑 
+    close_col = _pick_col(df, ["종가", "현재가", "Close"])
+    mcap_col = _pick_col(df, ["시가총액", "상장시가총액", "Market Cap"])
+    # 캡처본에 있는 '등락률'을 바로 사용 
+    ret_col = next((c for c in df.columns if "등락률" in str(c)), None)
 
-    # 3. 데이터 정리 및 상위 10개 추출
-    df = cap.sort_values(mcap_col, ascending=False).head(10).copy()
+    # 시가총액 순으로 정렬하여 상위 10개(그 페이지의 주요 종목들) 추출
+    df = df.sort_values(mcap_col, ascending=False).head(10).copy()
     
     df["ticker"] = df.index.astype(str)
     df["name"] = df["ticker"].map(stock.get_market_ticker_name)
     df["close"] = pd.to_numeric(df[close_col], errors="coerce")
     df["mcap"] = pd.to_numeric(df[mcap_col], errors="coerce")
-    
-    # 별도의 날짜 조회 없이, 캡처본에 있는 등락률 데이터를 그대로 사용 [cite: 27, 84]
-    df["return_1d"] = pd.to_numeric(df[ret_col], errors="coerce")
+    df["return_1d"] = pd.to_numeric(df[ret_col], errors="coerce") if ret_col else 0.0
 
-    # 결과 반환
     return df[["ticker", "name", "close", "mcap", "return_1d"]].reset_index(drop=True)
 
 
