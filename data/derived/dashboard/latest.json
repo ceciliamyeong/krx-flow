@@ -1,179 +1,62 @@
 {
-  "date": "NaT",
+  "date": "2026-02-27",
   "version": "1.0",
   "markets": {
-    "KOSPI": {
-      "close": 2663.34,
-      "turnover_krw": 13753057000000.0,
-      "turnover_readable": "+13.75조",
+    "KOSDAQ": {
+      "close": 1192.78,
+      "turnover_krw": 14846572000000.0,
+      "turnover_readable": "+14.85조",
       "investor_net_krw": {
-        "foreign": null,
-        "institution": null,
-        "individual": null
+        "foreign": 62000000000.0,
+        "institution": 446000000000.0,
+        "individual": -472000000000.0
       },
       "investor_net_readable": {
-        "foreign": null,
-        "institution": null,
-        "individual": null
+        "foreign": "+620억",
+        "institution": "+4460억",
+        "individual": "-4720억"
       },
       "investor_ratio": {
-        "foreign": null,
-        "institution": null,
-        "individual": null
+        "foreign": 0.004176048181357959,
+        "institution": 0.030040604659445965,
+        "individual": -0.031791850670983175
       },
       "flow_signal": {
-        "foreign": null,
-        "institution": null,
-        "individual": null
+        "foreign": "WEAK_BUY",
+        "institution": "NORMAL_BUY",
+        "individual": "NORMAL_SELL"
+      }
+    },
+    "KOSPI": {
+      "close": 6244.13,
+      "turnover_krw": 54939339000000.0,
+      "turnover_readable": "+54.94조",
+      "investor_net_krw": {
+        "foreign": -7053000000000.0,
+        "institution": 567000000000.0,
+        "individual": 6250000000000.0
+      },
+      "investor_net_readable": {
+        "foreign": "-7.05조",
+        "institution": "+5670억",
+        "individual": "+6.25조"
+      },
+      "investor_ratio": {
+        "foreign": -0.1283779551843534,
+        "institution": 0.010320473640936962,
+        "individual": 0.11376183466641271
+      },
+      "flow_signal": {
+        "foreign": "STRONG_SELL",
+        "institution": "WEAK_BUY",
+        "individual": "STRONG_BUY"
       }
     }
   },
   "extras": {
     "top10_treemap": {
-      "KOSPI": [
-        {
-          "ticker": null,
-          "name": "삼성전자",
-          "close": 216500.0,
-          "mcap": 1281601600000000.0,
-          "return_1d": -0.69
-        },
-        {
-          "ticker": null,
-          "name": "SK하이닉스",
-          "close": 1061000.0,
-          "mcap": 756177200000000.0,
-          "return_1d": -3.46
-        },
-        {
-          "ticker": null,
-          "name": "현대차",
-          "close": 674000.0,
-          "mcap": 138006700000000.0,
-          "return_1d": 10.67
-        },
-        {
-          "ticker": null,
-          "name": "삼성전자우",
-          "close": 143800.0,
-          "mcap": 117337200000000.0,
-          "return_1d": -3.3
-        },
-        {
-          "ticker": null,
-          "name": "LG에너지솔루션",
-          "close": 427000.0,
-          "mcap": 99918000000000.0,
-          "return_1d": 0.0
-        },
-        {
-          "ticker": null,
-          "name": "SK스퀘어",
-          "close": 645000.0,
-          "mcap": 85196200000000.0,
-          "return_1d": -5.01
-        },
-        {
-          "ticker": null,
-          "name": "삼성바이오로직스",
-          "close": 1778000.0,
-          "mcap": 82305300000000.0,
-          "return_1d": 0.68
-        },
-        {
-          "ticker": null,
-          "name": "기아",
-          "close": 205500.0,
-          "mcap": 80229900000000.0,
-          "return_1d": -0.24
-        },
-        {
-          "ticker": null,
-          "name": "두산에너빌리티",
-          "close": 106300.0,
-          "mcap": 68091600000000.0,
-          "return_1d": 2.41
-        },
-        {
-          "ticker": null,
-          "name": "HD현대중공업",
-          "close": 603000.0,
-          "mcap": 63291600000000.0,
-          "return_1d": 1.86
-        }
-      ],
-      "KOSDAQ": [
-        {
-          "ticker": null,
-          "name": "에코프로",
-          "close": 185000.0,
-          "mcap": 25118600000000.0,
-          "return_1d": 0.43
-        },
-        {
-          "ticker": null,
-          "name": "알테오젠",
-          "close": 407500.0,
-          "mcap": 21803600000000.0,
-          "return_1d": 1.12
-        },
-        {
-          "ticker": null,
-          "name": "에코프로비엠",
-          "close": 221500.0,
-          "mcap": 21668400000000.0,
-          "return_1d": 0.91
-        },
-        {
-          "ticker": null,
-          "name": "삼천당제약",
-          "close": 825000.0,
-          "mcap": 19352400000000.0,
-          "return_1d": 8.98
-        },
-        {
-          "ticker": null,
-          "name": "레인보우로보틱스",
-          "close": 860000.0,
-          "mcap": 16683900000000.0,
-          "return_1d": -2.27
-        },
-        {
-          "ticker": null,
-          "name": "에이비엘바이오",
-          "close": 194000.0,
-          "mcap": 10727800000000.0,
-          "return_1d": 1.52
-        },
-        {
-          "ticker": null,
-          "name": "코오롱티슈진",
-          "close": 107000.0,
-          "mcap": 8908400000000.0,
-          "return_1d": 1.9
-        },
-        {
-          "ticker": null,
-          "name": "리노공업",
-          "close": 106200.0,
-          "mcap": 8093700000000.0,
-          "return_1d": -0.56
-        },
-        {
-          "ticker": null,
-          "name": "케어젠",
-          "close": 136800.0,
-          "mcap": 7348200000000.0,
-          "return_1d": -2.01
-        },
-        {
-          "ticker": null,
-          "name": "리가켐바이오",
-          "close": 191700.0,
-          "mcap": 7018200000000.0,
-          "return_1d": 2.35
-        }
-      ]
+      "KOSPI": [],
+      "KOSDAQ": []
     },
     "treemap_png": {
       "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
@@ -188,36 +71,12 @@
       "KOSDAQ": {}
     },
     "upjong": {
-      "top": [
-        {
-          "name": "자동차",
-          "return_pct": 6.28
-        },
-        {
-          "name": "에너지장비및서비스",
-          "return_pct": 4.31
-        },
-        {
-          "name": "창업투자",
-          "return_pct": 3.93
-        }
-      ],
-      "bottom": [
-        {
-          "name": "디스플레이패널",
-          "return_pct": -8.87
-        },
-        {
-          "name": "전기유틸리티",
-          "return_pct": -5.54
-        },
-        {
-          "name": "손해보험",
-          "return_pct": -4.93
-        }
-      ]
+      "top": [],
+      "bottom": []
     },
-    "volatility_error": "time data 'NaT' does not match format '%Y-%m-%d'",
-    "breadth_error": "time data 'NaT' does not match format '%Y-%m-%d'"
+    "upjong_error": "Missing optional dependency 'lxml'.  Use pip or conda to install lxml.",
+    "top10_error": "Missing optional dependency 'lxml'.  Use pip or conda to install lxml.",
+    "volatility_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\"",
+    "breadth_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\""
   }
 }
