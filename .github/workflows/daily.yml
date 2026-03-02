@@ -39,6 +39,7 @@ jobs:
       - name: Check treemap outputs
         run: |
           ls -la data/derived/charts || true
+          ls -la data/derived/charts | sed -n '1,120p'
           ls -la data/derived/dashboard || true
           python -c "import json; print(json.load(open('data/derived/dashboard/latest.json','r',encoding='utf-8')).get('extras',{}).get('top10_error'))"    
 
