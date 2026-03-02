@@ -107,6 +107,7 @@ def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
 
         out = df[["ticker", "name", "close", "mcap", "return_1d"]]
         out = out.dropna(subset=["mcap"]).reset_index(drop=True)
+        out["ticker"] = out["ticker"].fillna("").astype(str)
 
         if out.empty:
             raise RuntimeError("pykrx cleaned empty")
@@ -736,9 +737,29 @@ def main():
 
     archive_path = OUT_ARCHIVE / f"{date_str}.json"
     latest_path = OUT_BASE / "latest.json"
-
-    archive_path.write_text(json.dumps(dashboard, ensure_ascii=False, indent=2), encoding="utf-8")
-    latest_path.write_text(json.dumps(dashboard, ensure_ascii=False, indent=2), encoding="utf-8")
+    
+    import math
+    
+    def sanitize_for_json(obj):
+        if isinstance(obj, float) and math.isnan(obj):
+            return None
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [sanitize_for_json(v) for v in obj]
+        return obj
+    
+    dashboard = sanitize_for_json(dashboard)
+    
+    archive_path.write_text(
+        json.dumps(dashboard, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8"
+    )
+    
+    latest_path.write_text(
+        json.dumps(dashboard, ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8"
+    )
 
     print("Built dashboard for:", date_str)
     print("Archive:", archive_path)
