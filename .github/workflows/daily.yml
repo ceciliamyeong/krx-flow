@@ -36,6 +36,12 @@ jobs:
           python scripts/run_daily.py
           python scripts/build_dashboard_close.py
 
+      - name: Check treemap outputs
+        run: |
+          ls -la data/derived/charts || true
+          ls -la data/derived/dashboard || true
+          python -c "import json; print(json.load(open('data/derived/dashboard/latest.json','r',encoding='utf-8')).get('extras',{}).get('top10_error'))"    
+
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
