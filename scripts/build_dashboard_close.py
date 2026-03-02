@@ -57,8 +57,15 @@ def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
 
     # 2. 컬럼명 유연하게 선택 (버전/환경 차이 방어)
     # _pick_col 함수를 사용하여 후보군 중 존재하는 컬럼을 선택합니다.
-    close_col = _pick_col(df, ["종가", "현재가", "Close", "PRICE"])
-    mcap_col = _pick_col(df, ["시가총액", "Market Cap", "MCAP", "시가총액(원)"])
+    close_col = _pick_col(df, [
+        "종가", "현재가",
+        "Close", "CLOSE", "close"
+    ])
+    
+    mcap_col = _pick_col(df, [
+        "시가총액", "상장시가총액",
+        "Market Cap", "MARKET_CAP", "MCAP", "mcap"
+    ])
     
     # 등락률 컬럼 찾기 (없을 경우 0으로 처리하기 위해 안전하게 검색)
     ret_col = next((c for c in df.columns if any(k in c for k in ["등락률", "Change", "Ratio"])), None)
@@ -119,15 +126,28 @@ def to_dash_date(s: str) -> str:
 
 
 def _pick_col(df: pd.DataFrame, candidates: List[str]) -> str:
+    cols = list(df.columns)
+
+    # 1. exact match
     for c in candidates:
-        if c in df.columns:
+        if c in cols:
             return c
-    # 키워드 포함 확인 (예: '시가총액'이라는 단어가 들어간 컬럼 찾기)
+
+    # 2. case-insensitive match
+    lower_map = {str(col).lower(): col for col in cols}
     for c in candidates:
-        for col in df.columns:
-            if c in str(col):
+        key = str(c).lower()
+        if key in lower_map:
+            return lower_map[key]
+
+    # 3. substring match (case-insensitive)
+    for col in cols:
+        col_l = str(col).lower()
+        for c in candidates:
+            if str(c).lower() in col_l:
                 return col
-    raise KeyError(f"필요한 컬럼을 찾을 수 없습니다: {candidates}")
+
+    raise KeyError(f"필요한 컬럼을 찾을 수 없습니다: {candidates} / available={cols}")
 
 def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
     if ratio is None:
@@ -198,30 +218,6 @@ def prev_business_day(date_str: str) -> str:
 # Extras: Top10 / Vol / Breadth
 # ------------------------
 
-def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
-    d = to_krx_date(date_str)
-    # pykrx가 사용자가 주신 주소의 데이터를 호출합니다.
-    df = stock.get_market_cap_by_ticker(d, market=market)
-    
-    if df is None or df.empty:
-        raise RuntimeError(f"데이터 수집 실패: {date_str}")
-
-    # 캡처본에서 확인된 실제 컬럼명 매핑 
-    close_col = _pick_col(df, ["종가", "현재가", "Close"])
-    mcap_col = _pick_col(df, ["시가총액", "상장시가총액", "Market Cap"])
-    # 캡처본에 있는 '등락률'을 바로 사용 
-    ret_col = next((c for c in df.columns if "등락률" in str(c)), None)
-
-    # 시가총액 순으로 정렬하여 상위 10개(그 페이지의 주요 종목들) 추출
-    df = df.sort_values(mcap_col, ascending=False).head(10).copy()
-    
-    df["ticker"] = df.index.astype(str)
-    df["name"] = df["ticker"].map(stock.get_market_ticker_name)
-    df["close"] = pd.to_numeric(df[close_col], errors="coerce")
-    df["mcap"] = pd.to_numeric(df[mcap_col], errors="coerce")
-    df["return_1d"] = pd.to_numeric(df[ret_col], errors="coerce") if ret_col else 0.0
-
-    return df[["ticker", "name", "close", "mcap", "return_1d"]].reset_index(drop=True)
 
 
 def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
@@ -256,8 +252,8 @@ def fetch_volatility_top5(date_str: str, market: str) -> List[Dict[str, Any]]:
     if today is None or today.empty or prev is None or prev.empty:
         raise RuntimeError(f"pykrx ohlcv empty: date={date_str}/{prev_str}, market={market}")
 
-    close_col = _pick_col(today, ["종가", "Close"])
-    prev_close_col = _pick_col(prev, ["종가", "Close"])
+    close_col = _pick_col(today, ["종가", "Close", "CLOSE", "close"])
+    prev_close_col = _pick_col(prev, ["종가", "Close", "CLOSE", "close"])
 
     df = today[[close_col]].copy().rename(columns={close_col: "close"})
     df["ticker"] = df.index.astype(str)
