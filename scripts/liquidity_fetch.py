@@ -15,7 +15,9 @@ def load_liquidity_history():
         raise FileNotFoundError(f"Liquidity file not found: {DATA_FILE}")
 
     df = pd.read_csv(DATA_FILE)
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"])
+    df["date"] = df["date"].dt.normalize()  # 시간 제거(00:00:00로 통일)
     df = df.sort_values(["date", "market"]).reset_index(drop=True)
 
     return df
