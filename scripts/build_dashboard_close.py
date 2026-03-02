@@ -202,37 +202,31 @@ def prev_business_day(date_str: str) -> str:
 # ------------------------
 
 def fetch_top10_mcap_and_return(date_str: str, market: str) -> pd.DataFrame:
-    prev_str = prev_business_day(date_str)
-
+    # 1. 시가총액 및 종목 정보 가져오기
     cap = stock.get_market_cap_by_ticker(to_krx_date(date_str), market=market)
+    
     if cap is None or cap.empty:
-        raise RuntimeError(f"pykrx cap empty: date={date_str}, market={market}")
+        raise RuntimeError(f"pykrx 데이터 수집 실패: {date_str} / {market}")
 
-    prev_ohlcv = stock.get_market_ohlcv_by_ticker(to_krx_date(prev_str), market=market)
-    if prev_ohlcv is None or prev_ohlcv.empty:
-        raise RuntimeError(f"pykrx ohlcv empty: date={prev_str}, market={market}")
-
-    close_col = _pick_col(cap, ["종가", "현재가", "Close"]) 
+    # 2. 컬럼명 유연하게 선택 (KRX 캡처본 기준: '현재가', '상장시가총액', '등락률')
+    close_col = _pick_col(cap, ["종가", "현재가", "Close"])
     mcap_col = _pick_col(cap, ["시가총액", "상장시가", "Market Cap"])
-    prev_close_col = _pick_col(prev_ohlcv, ["종가", "현재가", "Close"])
+    # 캡처본에 '등락률'이 명시되어 있으므로 후보군에 추가 [cite: 30, 87]
+    ret_col = _pick_col(cap, ["등락률", "Change", "Ratio"])
 
-    df = cap[[close_col, mcap_col]].copy()
-    df = df.rename(columns={close_col: "close", mcap_col: "mcap"})
+    # 3. 데이터 정리 및 상위 10개 추출
+    df = cap.sort_values(mcap_col, ascending=False).head(10).copy()
+    
     df["ticker"] = df.index.astype(str)
     df["name"] = df["ticker"].map(stock.get_market_ticker_name)
+    df["close"] = pd.to_numeric(df[close_col], errors="coerce")
+    df["mcap"] = pd.to_numeric(df[mcap_col], errors="coerce")
+    
+    # 별도의 날짜 조회 없이, 캡처본에 있는 등락률 데이터를 그대로 사용 [cite: 27, 84]
+    df["return_1d"] = pd.to_numeric(df[ret_col], errors="coerce")
 
-    prev_close = prev_ohlcv[[prev_close_col]].copy().rename(columns={prev_close_col: "prev_close"})
-    prev_close["ticker"] = prev_close.index.astype(str)
-
-    df = df.merge(prev_close.reset_index(drop=True), on="ticker", how="left")
-
-    df["close"] = pd.to_numeric(df["close"], errors="coerce")
-    df["prev_close"] = pd.to_numeric(df["prev_close"], errors="coerce")
-    df["mcap"] = pd.to_numeric(df["mcap"], errors="coerce")
-
-    df["return_1d"] = (df["close"] / df["prev_close"] - 1.0) * 100.0
-    df = df.dropna(subset=["mcap"]).sort_values("mcap", ascending=False).head(10).reset_index(drop=True)
-    return df[["ticker", "name", "close", "mcap", "return_1d"]]
+    # 결과 반환
+    return df[["ticker", "name", "close", "mcap", "return_1d"]].reset_index(drop=True)
 
 
 def make_treemap_png(df_top10: pd.DataFrame, title: str, outpath: Path) -> None:
