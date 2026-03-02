@@ -6,7 +6,7 @@ const BASE = location.pathname.split('/')[1]
   ? `/${location.pathname.split('/')[1]}`
   : '';
 
-fetch(`${BASE}/data/derived/dashboard/latest.json`)
+fetch("./data/derived/dashboard/latest.json")
   .then(res => {
     if (!res.ok) {
       throw new Error("JSON load failed: " + res.status);
