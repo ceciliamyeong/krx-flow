@@ -6,7 +6,7 @@ const BASE = location.pathname.split('/')[1]
   ? `/${location.pathname.split('/')[1]}`
   : '';
 
-fetch("./data/derived/dashboard/latest.json")
+fetch(`${BASE}/data/derived/dashboard/latest.json`)
   .then(res => {
     if (!res.ok) {
       throw new Error("JSON load failed: " + res.status);
@@ -62,7 +62,5 @@ function render() {
   setFlow("individual", m.investor_net_krw.individual, "개인");
 
   document.getElementById("treemap").src =
-    "../data/derived/charts/treemap_" +
-    currentMarket.toLowerCase() +
-    "_top10_latest.png";
+    `${BASE}/data/derived/charts/treemap_${currentMarket.toLowerCase()}_top10_latest.png`;
 }
