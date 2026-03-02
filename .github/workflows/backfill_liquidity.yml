@@ -40,9 +40,12 @@ jobs:
 
       - name: Backfill liquidity
         run: |
-          python scripts/backfill_liquidity.py --start "${{ inputs.start }}" --end "${{ inputs.end }}" --market "${{ inputs.market }}"
-          python scripts/build_liquidity_signals.py
-          python scripts/build_liquidity_charts.py
+          if [ "${{ inputs.market }}" = "BOTH" ]; then
+            python scripts/backfill_liquidity.py --start "${{ inputs.start }}" --end "${{ inputs.end }}" --market "KOSPI"
+            python scripts/backfill_liquidity.py --start "${{ inputs.start }}" --end "${{ inputs.end }}" --market "KOSDAQ"
+          else
+            python scripts/backfill_liquidity.py --start "${{ inputs.start }}" --end "${{ inputs.end }}" --market "${{ inputs.market }}"
+          fi
 
       - name: Commit & Push
         run: |
