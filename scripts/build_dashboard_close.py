@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 import pandas as pd
-
 import re
 import requests
 from pykrx import stock
@@ -19,12 +18,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import squarify
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
 HIST_LIQ = ROOT / "data" / "history" / "liquidity_daily.csv"
-
 # ✅ 우선 pivot을 읽고, 없으면 long-form을 읽어서 pivot 생성
 INV_PIVOT = ROOT / "data" / "derived" / "investor_flow_pivot_daily.csv"
 INV_LONG = ROOT / "data" / "derived" / "investor_flow_daily.csv"
@@ -32,6 +31,20 @@ INV_LONG = ROOT / "data" / "derived" / "investor_flow_daily.csv"
 OUT_BASE = ROOT / "data" / "derived" / "dashboard"
 OUT_ARCHIVE = OUT_BASE / "archive"
 OUT_CHART = ROOT / "data" / "derived" / "charts"
+
+NAVER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Referer": "https://finance.naver.com/",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+}
+
+
+def now_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    return datetime.now(ZoneInfo("Asia/Seoul")).strftime(fmt)
+
+
+def today_kst_date() -> str:
+    return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d")
 
 
 def fetch_top10_from_naver(market: str) -> pd.DataFrame:
@@ -82,6 +95,121 @@ def fetch_top10_from_naver(market: str) -> pd.DataFrame:
 
     out = out.dropna(subset=["mcap"]).sort_values("mcap", ascending=False).head(10).reset_index(drop=True)
     return out[["ticker", "name", "close", "mcap", "return_1d"]]
+
+def fetch_index_and_turnover_from_naver(market: str) -> Dict[str, Any]:
+    """
+    네이버 지수 페이지에서 현재지수/거래대금(가능하면) 추출
+    """
+    code = "KOSPI" if market.upper() == "KOSPI" else "KOSDAQ"
+    url = f"https://finance.naver.com/sise/sise_index.naver?code={code}"
+
+    r = requests.get(url, headers=NAVER_HEADERS, timeout=20)
+    r.raise_for_status()
+    r.encoding = "euc-kr"
+    html = r.text
+
+    def to_float(s: str) -> Optional[float]:
+        s = str(s).replace(",", "").strip()
+        s = re.sub(r"[^\d\.\-]", "", s)
+        try:
+            return float(s)
+        except:
+            return None
+
+    # 현재지수
+    close = None
+    for pat in [
+        r"현재지수[^0-9]*([\d,]+\.\d+)",
+        r"num[^>]*>\s*([\d,]+\.\d+)\s*<",
+    ]:
+        m = re.search(pat, html)
+        if m:
+            close = to_float(m.group(1))
+            if close is not None:
+                break
+
+    # 거래대금(조/억)
+    turnover_krw = None
+    m = re.search(r"거래대금[^0-9]*([\d,\.]+)\s*([조억])", html)
+    if m:
+        v = to_float(m.group(1))
+        unit = m.group(2)
+        if v is not None:
+            turnover_krw = v * (1e12 if unit == "조" else 1e8)
+
+    return {"close": close, "turnover_krw": turnover_krw}
+
+
+def fetch_investor_flow_from_naver(market: str) -> Dict[str, Optional[float]]:
+    """
+    네이버 투자자별 매매동향(장중)에서 개인/외국인/기관 순매수(원화) 추출
+    반환 키를 프론트/카드와 동일하게: foreign/institution/individual
+    """
+    from io import StringIO
+
+    sosok = "0" if market.upper() == "KOSPI" else "1"
+    url = f"https://finance.naver.com/sise/sise_investor.naver?sosok={sosok}"
+
+    r = requests.get(url, headers=NAVER_HEADERS, timeout=20)
+    r.raise_for_status()
+    r.encoding = "euc-kr"
+
+    tables = pd.read_html(StringIO(r.text))
+    if not tables:
+        raise RuntimeError("Naver investor parse failed: no tables")
+
+    df = None
+    for t in tables:
+        cols = [str(c) for c in t.columns]
+        if any("개인" in c for c in cols) and any("외국" in c for c in cols) and any("기관" in c for c in cols):
+            df = t.copy()
+            break
+
+    if df is None or df.empty:
+        raise RuntimeError("Naver investor table not found/empty")
+
+    row = df.iloc[0].to_dict()
+
+    def to_num(x) -> Optional[float]:
+        s = str(x).replace(",", "").strip()
+        s = re.sub(r"[^\d\.\-\+]", "", s)
+        try:
+            return float(s)
+        except:
+            return None
+
+    def pick_key(keys, contains: str):
+        for k in keys:
+            if contains in str(k):
+                return k
+        return None
+
+    keys = list(row.keys())
+    k_ind = pick_key(keys, "개인")
+    k_for = pick_key(keys, "외국")
+    k_ins = pick_key(keys, "기관")
+
+    # 네이버 표는 대체로 억원 단위로 노출 → 원화 환산(억=1e8)
+    mul = 1e8
+    individual = to_num(row.get(k_ind))
+    foreign = to_num(row.get(k_for))
+    institution = to_num(row.get(k_ins))
+
+    return {
+        "foreign": None if foreign is None else foreign * mul,
+        "institution": None if institution is None else institution * mul,
+        "individual": None if individual is None else individual * mul,
+    }
+
+
+def fetch_market_snapshot_from_naver(market: str) -> Dict[str, Any]:
+    """
+    지수/거래대금 + 투자자 수급을 한 번에 가져오는 통합 스냅샷
+    """
+    idx = fetch_index_and_turnover_from_naver(market)
+    flow = fetch_investor_flow_from_naver(market)
+    return {"close": idx.get("close"), "turnover_krw": idx.get("turnover_krw"), "flow": flow}
+
 
 # ------------------------
 # Top10 treemap data collection (pykrx wrapper with column-safe logic)
@@ -263,6 +391,21 @@ def krw_readable(x: Optional[float]) -> Optional[str]:
     if a >= 1e8:
         return f"{v/1e8:+.0f}억"
     return f"{v:+.0f}"
+
+def signal_label(ratio: Optional[float], strong: float = 0.05, normal: float = 0.02) -> Optional[str]:
+    if ratio is None:
+        return None
+    r = float(ratio)
+    a = abs(r)
+
+    if a < normal:
+        return "WEAK_BUY" if r > 0 else ("WEAK_SELL" if r < 0 else "WEAK")
+
+    if a < strong:
+        return "NORMAL_BUY" if r > 0 else "NORMAL_SELL"
+
+    return "STRONG_BUY" if r > 0 else "STRONG_SELL"
+
 
 
 def to_krx_date(s: str) -> str:
@@ -780,70 +923,39 @@ def build_market_cards(liq_day: pd.DataFrame, inv_day: pd.DataFrame) -> Dict[str
 def main():
     ensure_dirs()
 
-    liq = load_liq_df()
-    inv = load_inv_df()
+    # ✅ 대시보드 표기 기준일: 오늘(KST) — Top10 기준과 동일
+    date_str = today_kst_date()
+    print("Dashboard date (KST):", date_str)
 
-    date_str = sorted(liq["date"].unique())[-1]   # 가장 최근 데이터 자동 선택
-    print("Dashboard date:", date_str)
-
-    liq_day = load_index_rows(liq, date_str)
-    inv_day = inv[inv["date"] == date_str].copy() if inv is not None and not inv.empty else pd.DataFrame()
-
-    # 프론트가 죽지 않도록 extras 기본 구조 보장
     dashboard: Dict[str, Any] = {
         "date": date_str,
         "version": "1.0",
-        "markets": build_market_cards(liq_day, inv_day),
+        "markets": {},  # ✅ 여기부터 네이버로 채움
         "extras": {
             "top10_treemap": {"KOSPI": [], "KOSDAQ": []},
             "treemap_png": {
                 "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
                 "KOSDAQ": "data/derived/charts/treemap_kosdaq_top10_latest.png",
             },
-            "volatility_top5": {"KOSPI": [], "KOSDAQ": []},
-            "breadth": {"KOSPI": {}, "KOSDAQ": {}},
-            "upjong": {"top": [], "bottom": []}, 
+            "upjong": {"top": [], "bottom": []},
         },
     }
 
-        # -----------------------------------------
-    # ✅ NAVER LIVE SNAPSHOT (index + turnover + investor flow)
-    # -----------------------------------------
+    # ✅ as-of 시간(장중 갱신 확인용)
+    dashboard["extras"]["naver_asof_kst"] = now_kst_str()
+
+    # 1) markets: 네이버 스냅샷으로 KOSPI/KOSDAQ 카드 생성
     try:
         for mk in ["KOSPI", "KOSDAQ"]:
-            if mk not in dashboard["markets"]:
-                continue
+            snap = fetch_market_snapshot_from_naver(mk)
 
-            snap = fetch_index_and_turnover_from_naver(mk)
-            flow = fetch_investor_net_from_naver(mk)
+            close = snap.get("close")
+            turnover = snap.get("turnover_krw")
 
-            # 1) close/turnover overwrite
-            if snap.get("close") is not None:
-                dashboard["markets"][mk]["close"] = float(snap["close"])
-
-            if snap.get("turnover_krw") is not None:
-                tv = float(snap["turnover_krw"])
-                dashboard["markets"][mk]["turnover_krw"] = tv
-                dashboard["markets"][mk]["turnover_readable"] = krw_readable(tv)
-
-            # 2) investor overwrite (원화)
-            foreign = flow.get("foreign_net")
-            inst = flow.get("institution_net")
-            indiv = flow.get("individual_net")
-
-            dashboard["markets"][mk]["investor_net_krw"] = {
-                "foreign": foreign,
-                "institution": inst,
-                "individual": indiv,
-            }
-            dashboard["markets"][mk]["investor_net_readable"] = {
-                "foreign": krw_readable(foreign),
-                "institution": krw_readable(inst),
-                "individual": krw_readable(indiv),
-            }
-
-            # 3) ratio/signal recompute based on (possibly updated) turnover
-            turnover = dashboard["markets"][mk].get("turnover_krw")
+            flow = snap.get("flow", {}) or {}
+            foreign = flow.get("foreign")
+            inst = flow.get("institution")
+            indiv = flow.get("individual")
 
             def ratio(v: Optional[float]) -> Optional[float]:
                 if v is None or turnover is None or turnover == 0:
@@ -855,71 +967,68 @@ def main():
                 "institution": ratio(inst),
                 "individual": ratio(indiv),
             }
-            dashboard["markets"][mk]["investor_ratio"] = ratios
-            dashboard["markets"][mk]["flow_signal"] = {
-                "foreign": signal_label(ratios["foreign"]),
-                "institution": signal_label(ratios["institution"]),
-                "individual": signal_label(ratios["individual"]),
+
+            dashboard["markets"][mk] = {
+                "close": close,
+                "turnover_krw": turnover,
+                "turnover_readable": krw_readable(turnover),
+                "investor_net_krw": {"foreign": foreign, "institution": inst, "individual": indiv},
+                "investor_net_readable": {
+                    "foreign": krw_readable(foreign),
+                    "institution": krw_readable(inst),
+                    "individual": krw_readable(indiv),
+                },
+                "investor_ratio": ratios,
+                "flow_signal": {
+                    "foreign": signal_label(ratios["foreign"]),
+                    "institution": signal_label(ratios["institution"]),
+                    "individual": signal_label(ratios["individual"]),
+                },
             }
 
+        dashboard["extras"]["market_snapshot_source"] = "naver"
     except Exception as e:
-        # 프론트 안죽게 에러만 기록
-        dashboard["extras"]["naver_live_error"] = str(e)
+        dashboard["extras"]["market_snapshot_source"] = "naver_failed"
+        dashboard["extras"]["naver_market_snapshot_error"] = str(e)
 
-    # Upjong (업종 상/하위)
+    # 2) Upjong (업종 상/하위) — 네이버 기반인데 너 코드에서 lxml 없으면 깨질 수 있음
+    #    (workflow에 pip install lxml html5lib 해주는 건 별도)
     try:
+        # 기존 함수가 파일에 남아있다면 그대로 호출 가능.
+        # 여기서는 너가 이미 구현한 fetch_upjong_top_bottom3_from_naver()를 그대로 쓴다는 전제.
+        from io import StringIO  # noqa
+        # ---- 아래 함수가 기존 파일에 있다면 그대로 동작 ----
+        # dashboard["extras"]["upjong"] = fetch_upjong_top_bottom3_from_naver()
+        # --------------------------------------------------
+        # 이 복붙 버전에서는 upjong 함수가 "아래에 포함돼있지 않으면" 에러 나니까,
+        # 너 파일에 upjong 함수가 이미 있는 상태라는 전제하에 호출만 열어둠.
         dashboard["extras"]["upjong"] = fetch_upjong_top_bottom3_from_naver()
     except Exception as e:
         dashboard["extras"]["upjong"] = {"top": [], "bottom": []}
         dashboard["extras"]["upjong_error"] = str(e)
-    
-  
-    # Top10 treemap + data (실패해도 latest.json 생성)
+
+    # 3) Top10 treemap: 네이버 TOP10으로 통일 (기준 일치)
     try:
         TOP_N = 10
         for mk in ["KOSPI", "KOSDAQ"]:
-            # 함수 이름을 정의된 이름과 일치시켰습니다.
-            df_top = fetch_top10_mcap_and_return(date_str, mk) 
-            
-            # 프론트 호환을 위해 key/파일명은 top10 그대로 유지
+            df_top = fetch_top10_from_naver(mk)
             dashboard["extras"]["top10_treemap"][mk] = df_top.to_dict(orient="records")
 
             make_treemap_png(
                 df_top,
-                f"{mk} 시총 TOP{TOP_N} — {date_str}",
+                f"{mk} 시총 TOP{TOP_N} — LIVE {dashboard['extras']['naver_asof_kst']}",
                 OUT_CHART / f"treemap_{mk.lower()}_top10_latest.png",
-                market=mk
+                market=mk,
             )
-            
     except Exception as e:
         dashboard["extras"]["top10_error"] = str(e)
-        
 
-    # Volatility
-    try:
-        dashboard["extras"]["volatility_top5"] = {
-            "KOSPI": fetch_volatility_top5(date_str, "KOSPI"),
-            "KOSDAQ": fetch_volatility_top5(date_str, "KOSDAQ"),
-        }
-    except Exception as e:
-        dashboard["extras"]["volatility_top5"] = {"KOSPI": [], "KOSDAQ": []}
-        dashboard["extras"]["volatility_error"] = str(e)
-
-    # Breadth
-    try:
-        dashboard["extras"]["breadth"] = {
-            "KOSPI": fetch_breadth(date_str, "KOSPI"),
-            "KOSDAQ": fetch_breadth(date_str, "KOSDAQ"),
-        }
-    except Exception as e:
-        dashboard["extras"]["breadth"] = {"KOSPI": {}, "KOSDAQ": {}}
-        dashboard["extras"]["breadth_error"] = str(e)
-
+    # 4) 저장
     archive_path = OUT_ARCHIVE / f"{date_str}.json"
     latest_path = OUT_BASE / "latest.json"
-    
+
     import math
-    
+
     def sanitize_for_json(obj):
         if isinstance(obj, float) and math.isnan(obj):
             return None
@@ -928,20 +1037,19 @@ def main():
         if isinstance(obj, list):
             return [sanitize_for_json(v) for v in obj]
         return obj
-    
+
     dashboard = sanitize_for_json(dashboard)
-    
+
     archive_path.write_text(
         json.dumps(dashboard, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8"
+        encoding="utf-8",
     )
-    
     latest_path.write_text(
         json.dumps(dashboard, ensure_ascii=False, indent=2, allow_nan=False),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
-    print("Built dashboard for:", date_str)
+    print("Built dashboard for (KST):", date_str)
     print("Archive:", archive_path)
     print("Latest:", latest_path)
     print("Charts:", OUT_CHART)
