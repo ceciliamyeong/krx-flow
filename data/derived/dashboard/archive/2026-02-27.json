@@ -55,8 +55,150 @@
   },
   "extras": {
     "top10_treemap": {
-      "KOSPI": [],
-      "KOSDAQ": []
+      "KOSPI": [
+        {
+          "ticker": null,
+          "name": "삼성전자",
+          "close": 210500.0,
+          "mcap": 1246083800000000.0,
+          "return_1d": -2.77
+        },
+        {
+          "ticker": null,
+          "name": "SK하이닉스",
+          "close": 1031000.0,
+          "mcap": 734796100000000.0,
+          "return_1d": -2.83
+        },
+        {
+          "ticker": null,
+          "name": "현대차",
+          "close": 644000.0,
+          "mcap": 131864000000000.0,
+          "return_1d": -4.45
+        },
+        {
+          "ticker": null,
+          "name": "삼성전자우",
+          "close": 137300.0,
+          "mcap": 112033300000000.0,
+          "return_1d": -4.52
+        },
+        {
+          "ticker": null,
+          "name": "LG에너지솔루션",
+          "close": 415000.0,
+          "mcap": 97110000000000.0,
+          "return_1d": -2.81
+        },
+        {
+          "ticker": null,
+          "name": "SK스퀘어",
+          "close": 629000.0,
+          "mcap": 83082800000000.0,
+          "return_1d": -2.48
+        },
+        {
+          "ticker": null,
+          "name": "삼성바이오로직스",
+          "close": 1727000.0,
+          "mcap": 79944500000000.0,
+          "return_1d": -2.87
+        },
+        {
+          "ticker": null,
+          "name": "기아",
+          "close": 192950.0,
+          "mcap": 75330200000000.0,
+          "return_1d": -6.11
+        },
+        {
+          "ticker": null,
+          "name": "한화에어로스페이스",
+          "close": 1377000.0,
+          "mcap": 71002800000000.0,
+          "return_1d": 15.23
+        },
+        {
+          "ticker": null,
+          "name": "두산에너빌리티",
+          "close": 104300.0,
+          "mcap": 66810500000000.0,
+          "return_1d": -1.88
+        }
+      ],
+      "KOSDAQ": [
+        {
+          "ticker": null,
+          "name": "에코프로",
+          "close": 184000.0,
+          "mcap": 24982800000000.0,
+          "return_1d": -0.54
+        },
+        {
+          "ticker": null,
+          "name": "알테오젠",
+          "close": 405500.0,
+          "mcap": 21696600000000.0,
+          "return_1d": -0.49
+        },
+        {
+          "ticker": null,
+          "name": "에코프로비엠",
+          "close": 220500.0,
+          "mcap": 21570500000000.0,
+          "return_1d": -0.45
+        },
+        {
+          "ticker": null,
+          "name": "삼천당제약",
+          "close": 829000.0,
+          "mcap": 19446200000000.0,
+          "return_1d": 0.48
+        },
+        {
+          "ticker": null,
+          "name": "레인보우로보틱스",
+          "close": 929000.0,
+          "mcap": 18022500000000.0,
+          "return_1d": 8.02
+        },
+        {
+          "ticker": null,
+          "name": "에이비엘바이오",
+          "close": 198700.0,
+          "mcap": 10987700000000.0,
+          "return_1d": 2.42
+        },
+        {
+          "ticker": null,
+          "name": "리노공업",
+          "close": 123600.0,
+          "mcap": 9419800000000.0,
+          "return_1d": 16.38
+        },
+        {
+          "ticker": null,
+          "name": "코오롱티슈진",
+          "close": 110300.0,
+          "mcap": 9183200000000.0,
+          "return_1d": 3.08
+        },
+        {
+          "ticker": null,
+          "name": "케어젠",
+          "close": 139400.0,
+          "mcap": 7487900000000.0,
+          "return_1d": 1.9
+        },
+        {
+          "ticker": null,
+          "name": "리가켐바이오",
+          "close": 203500.0,
+          "mcap": 7450200000000.0,
+          "return_1d": 6.16
+        }
+      ]
     },
     "treemap_png": {
       "KOSPI": "data/derived/charts/treemap_kospi_top10_latest.png",
@@ -71,11 +213,35 @@
       "KOSDAQ": {}
     },
     "upjong": {
-      "top": [],
-      "bottom": []
+      "top": [
+        {
+          "name": "우주항공과국방",
+          "return_pct": 14.38
+        },
+        {
+          "name": "해운사",
+          "return_pct": 13.97
+        },
+        {
+          "name": "생명과학도구및서비스",
+          "return_pct": 5.51
+        }
+      ],
+      "bottom": [
+        {
+          "name": "항공사",
+          "return_pct": -8.28
+        },
+        {
+          "name": "전자제품",
+          "return_pct": -6.39
+        },
+        {
+          "name": "전기유틸리티",
+          "return_pct": -5.86
+        }
+      ]
     },
-    "upjong_error": "Missing optional dependency 'lxml'.  Use pip or conda to install lxml.",
-    "top10_error": "Missing optional dependency 'lxml'.  Use pip or conda to install lxml.",
     "volatility_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\"",
     "breadth_error": "\"None of [Index(['시가', '고가', '저가', '종가'], dtype='object')] are in the [columns]\""
   }
