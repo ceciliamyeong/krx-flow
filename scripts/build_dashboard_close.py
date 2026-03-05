@@ -207,7 +207,11 @@ def fetch_market_snapshot_from_naver(market: str) -> Dict[str, Any]:
     지수/거래대금 + 투자자 수급을 한 번에 가져오는 통합 스냅샷
     """
     idx = fetch_index_and_turnover_from_naver(market)
-    flow = fetch_investor_flow_from_naver(market)
+    try:
+        flow = fetch_investor_flow_from_naver(market)
+    except Exception as e:
+        print(f"[investor flow] {market} failed (continuing without flow): {e}")
+        flow = {"foreign": None, "institution": None, "individual": None}
     return {"close": idx.get("close"), "turnover_krw": idx.get("turnover_krw"), "flow": flow}
 
 
@@ -945,8 +949,9 @@ def main():
     dashboard["extras"]["naver_asof_kst"] = now_kst_str()
 
     # 1) markets: 네이버 스냅샷으로 KOSPI/KOSDAQ 카드 생성
-    try:
-        for mk in ["KOSPI", "KOSDAQ"]:
+    snap_errors: Dict[str, str] = {}
+    for mk in ["KOSPI", "KOSDAQ"]:
+        try:
             snap = fetch_market_snapshot_from_naver(mk)
 
             close = snap.get("close")
@@ -957,10 +962,10 @@ def main():
             inst = flow.get("institution")
             indiv = flow.get("individual")
 
-            def ratio(v: Optional[float]) -> Optional[float]:
-                if v is None or turnover is None or turnover == 0:
+            def ratio(v: Optional[float], _t=turnover) -> Optional[float]:
+                if v is None or _t is None or _t == 0:
                     return None
-                return float(v) / float(turnover)
+                return float(v) / float(_t)
 
             ratios = {
                 "foreign": ratio(foreign),
@@ -985,11 +990,16 @@ def main():
                     "individual": signal_label(ratios["individual"]),
                 },
             }
+        except Exception as e:
+            snap_errors[mk] = str(e)
+            print(f"[market snapshot] {mk} failed: {e}")
 
-        dashboard["extras"]["market_snapshot_source"] = "naver"
-    except Exception as e:
+    if dashboard["markets"]:
+        dashboard["extras"]["market_snapshot_source"] = "naver" if not snap_errors else "naver_partial"
+    else:
         dashboard["extras"]["market_snapshot_source"] = "naver_failed"
-        dashboard["extras"]["naver_market_snapshot_error"] = str(e)
+    if snap_errors:
+        dashboard["extras"]["naver_market_snapshot_error"] = snap_errors
 
     # 2) Upjong (업종 상/하위) — 네이버 기반인데 너 코드에서 lxml 없으면 깨질 수 있음
     #    (workflow에 pip install lxml html5lib 해주는 건 별도)

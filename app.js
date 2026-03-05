@@ -112,10 +112,10 @@ function renderHeader() {
 
 function renderSnapshot() {
   const mk = STATE.market;
+  $("market-name").textContent = mk;
+
   const m = STATE.data?.markets?.[mk];
   if (!m) return;
-
-  $("market-name").textContent = mk;
 
   $("close").textContent = m.close !== null && m.close !== undefined ? fmtNum(m.close) : "—";
   $("turnover").textContent = `거래대금: ${m.turnover_readable || fmtKrwReadable(m.turnover_krw)}`;
